@@ -3,8 +3,7 @@
   "shell": "src/main-app.html",
   "fragments": [
     "src/game-page.html",
-    "src/info-page.html",
-    "src/my-view404.html"
+    "src/info-page.html"
   ],
   "sources": [
     "src/**/*",

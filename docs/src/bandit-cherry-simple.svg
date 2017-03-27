@@ -1,0 +1,14 @@
+<svg version="1.1" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+ <defs>
+  <marker id="marker5176" overflow="visible" orient="auto">
+   <path transform="scale(.2)" d="m-5-5v10h10v-10h-10z" fill="#2e7d32" fill-rule="evenodd" stroke="#2e7d32" stroke-width="1pt"/>
+  </marker>
+  <marker id="marker4960" overflow="visible" orient="auto">
+   <path transform="scale(.2)" d="m-5-5v10h10v-10h-10z" fill="#2e7d32" fill-rule="evenodd" stroke="#2e7d32" stroke-width="1pt"/>
+  </marker>
+ </defs>
+ <circle cx="150.71" cy="196.1" r="44.617" fill="#d50000" stroke-width=".34857"/>
+ <circle cx="68.306" cy="147.18" r="44.617" fill="#d50000" stroke-width=".34857"/>
+ <path d="m111.32 125.37s37.948-18.635 62.509-50.698c16.781-21.906 21.748-56.735 21.748-56.735" fill="none" marker-end="url(#marker5176)" stroke="#2e7d32" stroke-width="6.139"/>
+ <path d="m182.44 158.14s30.794-32.714 32.49-69.431c1.5946-34.522-19.356-70.763-19.356-70.763" fill="none" marker-end="url(#marker4960)" stroke="#2e7d32" stroke-width="6.139"/>
+</svg>

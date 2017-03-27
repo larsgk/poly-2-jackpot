@@ -1,0 +1,861 @@
+<html><head></head><body><div hidden="" by-polymer-bundler=""><link rel="import" href="main-app.html"><!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+--><!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+--><script>
+  /** @polymerBehavior Polymer.PaperButtonBehavior */
+  Polymer.PaperButtonBehaviorImpl = {
+    properties: {
+      /**
+       * The z-depth of this element, from 0-5. Setting to 0 will remove the
+       * shadow, and each increasing number greater than 0 will be "deeper"
+       * than the last.
+       *
+       * @attribute elevation
+       * @type number
+       * @default 1
+       */
+      elevation: {
+        type: Number,
+        reflectToAttribute: true,
+        readOnly: true
+      }
+    },
+
+    observers: [
+      '_calculateElevation(focused, disabled, active, pressed, receivedFocusFromKeyboard)',
+      '_computeKeyboardClass(receivedFocusFromKeyboard)'
+    ],
+
+    hostAttributes: {
+      role: 'button',
+      tabindex: '0',
+      animated: true
+    },
+
+    _calculateElevation: function() {
+      var e = 1;
+      if (this.disabled) {
+        e = 0;
+      } else if (this.active || this.pressed) {
+        e = 4;
+      } else if (this.receivedFocusFromKeyboard) {
+        e = 3;
+      }
+      this._setElevation(e);
+    },
+
+    _computeKeyboardClass: function(receivedFocusFromKeyboard) {
+      this.toggleClass('keyboard-focus', receivedFocusFromKeyboard);
+    },
+
+    /**
+     * In addition to `IronButtonState` behavior, when space key goes down,
+     * create a ripple down effect.
+     *
+     * @param {!KeyboardEvent} event .
+     */
+    _spaceKeyDownHandler: function(event) {
+      Polymer.IronButtonStateImpl._spaceKeyDownHandler.call(this, event);
+      // Ensure that there is at most one ripple when the space key is held down.
+      if (this.hasRipple() && this.getRipple().ripples.length < 1) {
+        this._ripple.uiDownAction();
+      }
+    },
+
+    /**
+     * In addition to `IronButtonState` behavior, when space key goes up,
+     * create a ripple up effect.
+     *
+     * @param {!KeyboardEvent} event .
+     */
+    _spaceKeyUpHandler: function(event) {
+      Polymer.IronButtonStateImpl._spaceKeyUpHandler.call(this, event);
+      if (this.hasRipple()) {
+        this._ripple.uiUpAction();
+      }
+    }
+  };
+
+  /** @polymerBehavior */
+  Polymer.PaperButtonBehavior = [
+    Polymer.IronButtonState,
+    Polymer.IronControlState,
+    Polymer.PaperRippleBehavior,
+    Polymer.PaperButtonBehaviorImpl
+  ];
+</script>
+<!--
+@license
+Copyright (c) 2016 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+--><!--
+@license
+Copyright (c) 2015 The Polymer Project Authors. All rights reserved.
+This code may only be used under the BSD style license found at http://polymer.github.io/LICENSE.txt
+The complete set of authors may be found at http://polymer.github.io/AUTHORS.txt
+The complete set of contributors may be found at http://polymer.github.io/CONTRIBUTORS.txt
+Code distributed by Google as part of the polymer project is also
+subject to an additional IP rights grant found at http://polymer.github.io/PATENTS.txt
+--><custom-style>
+  <style is="custom-style">
+    html {
+
+      --shadow-transition: {
+        transition: box-shadow 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      };
+
+      --shadow-none: {
+        box-shadow: none;
+      };
+
+      /* from http://codepen.io/shyndman/pen/c5394ddf2e8b2a5c9185904b57421cdb */
+
+      --shadow-elevation-2dp: {
+        box-shadow: 0 2px 2px 0 rgba(0, 0, 0, 0.14),
+                    0 1px 5px 0 rgba(0, 0, 0, 0.12),
+                    0 3px 1px -2px rgba(0, 0, 0, 0.2);
+      };
+
+      --shadow-elevation-3dp: {
+        box-shadow: 0 3px 4px 0 rgba(0, 0, 0, 0.14),
+                    0 1px 8px 0 rgba(0, 0, 0, 0.12),
+                    0 3px 3px -2px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-4dp: {
+        box-shadow: 0 4px 5px 0 rgba(0, 0, 0, 0.14),
+                    0 1px 10px 0 rgba(0, 0, 0, 0.12),
+                    0 2px 4px -1px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-6dp: {
+        box-shadow: 0 6px 10px 0 rgba(0, 0, 0, 0.14),
+                    0 1px 18px 0 rgba(0, 0, 0, 0.12),
+                    0 3px 5px -1px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-8dp: {
+        box-shadow: 0 8px 10px 1px rgba(0, 0, 0, 0.14),
+                    0 3px 14px 2px rgba(0, 0, 0, 0.12),
+                    0 5px 5px -3px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-12dp: {
+        box-shadow: 0 12px 16px 1px rgba(0, 0, 0, 0.14),
+                    0 4px 22px 3px rgba(0, 0, 0, 0.12),
+                    0 6px 7px -4px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-16dp: {
+        box-shadow: 0 16px 24px 2px rgba(0, 0, 0, 0.14),
+                    0  6px 30px 5px rgba(0, 0, 0, 0.12),
+                    0  8px 10px -5px rgba(0, 0, 0, 0.4);
+      };
+
+      --shadow-elevation-24dp: {
+        box-shadow: 0 24px 38px 3px rgba(0, 0, 0, 0.14),
+                    0 9px 46px 8px rgba(0, 0, 0, 0.12),
+                    0 11px 15px -7px rgba(0, 0, 0, 0.4);
+      };
+    }
+  </style>
+</custom-style>
+<!--
+Material design: [Cards](https://www.google.com/design/spec/components/cards.html)
+
+Shared styles that you can apply to an element to renders two shadows on top
+of each other,that create the effect of a lifted piece of paper.
+
+Example:
+
+    <custom-style>
+      <style is="custom-style" include="paper-material"></style>
+    </custom-style>
+
+    <div class="paper-material elevation-1">
+      ... content ...
+    </div>
+
+@group Paper Elements
+@demo demo/index.html
+-->
+
+<dom-module id="paper-material" assetpath="../bower_components/paper-styles/element-styles/">
+  <template>
+    <style>
+      :host(.paper-material), .paper-material {
+        display: block;
+        position: relative;
+      }
+
+      :host(.paper-material[elevation="1"]), .paper-material[elevation="1"] {
+        @apply --shadow-elevation-2dp;
+      }
+
+      :host(.paper-material[elevation="2"]), .paper-material[elevation="2"] {
+        @apply --shadow-elevation-4dp;
+      }
+
+      :host(.paper-material[elevation="3"]), .paper-material[elevation="3"] {
+        @apply --shadow-elevation-6dp;
+      }
+
+      :host(.paper-material[elevation="4"]), .paper-material[elevation="4"] {
+        @apply --shadow-elevation-8dp;
+      }
+
+      :host(.paper-material[elevation="5"]), .paper-material[elevation="5"] {
+        @apply --shadow-elevation-16dp;
+      }
+    </style>
+  </template>
+</dom-module>
+<!--
+Material design: [Buttons](https://www.google.com/design/spec/components/buttons.html)
+
+`paper-button` is a button. When the user touches the button, a ripple effect emanates
+from the point of contact. It may be flat or raised. A raised button is styled with a
+shadow.
+
+Example:
+
+    <paper-button>Flat button</paper-button>
+    <paper-button raised>Raised button</paper-button>
+    <paper-button noink>No ripple effect</paper-button>
+    <paper-button toggles>Toggle-able button</paper-button>
+
+A button that has `toggles` true will remain `active` after being clicked (and
+will have an `active` attribute set). For more information, see the `Polymer.IronButtonState`
+behavior.
+
+You may use custom DOM in the button body to create a variety of buttons. For example, to
+create a button with an icon and some text:
+
+    <paper-button>
+      <iron-icon icon="favorite"></iron-icon>
+      custom button content
+    </paper-button>
+
+To use `paper-button` as a link, wrap it in an anchor tag. Since `paper-button` will already
+receive focus, you may want to prevent the anchor tag from receiving focus as well by setting
+its tabindex to -1.
+
+    <a href="https://www.polymer-project.org/" tabindex="-1">
+      <paper-button raised>Polymer Project</paper-button>
+    </a>
+
+### Styling
+
+Style the button with CSS as you would a normal DOM element.
+
+    paper-button.fancy {
+      background: green;
+      color: yellow;
+    }
+
+    paper-button.fancy:hover {
+      background: lime;
+    }
+
+    paper-button[disabled],
+    paper-button[toggles][active] {
+      background: red;
+    }
+
+By default, the ripple is the same color as the foreground at 25% opacity. You may
+customize the color using the `--paper-button-ink-color` custom property.
+
+The following custom properties and mixins are also available for styling:
+
+Custom property | Description | Default
+----------------|-------------|----------
+`--paper-button-ink-color` | Background color of the ripple | `Based on the button's color`
+`--paper-button` | Mixin applied to the button | `{}`
+`--paper-button-disabled` | Mixin applied to the disabled button. Note that you can also use the `paper-button[disabled]` selector | `{}`
+`--paper-button-flat-keyboard-focus` | Mixin applied to a flat button after it's been focused using the keyboard | `{}`
+`--paper-button-raised-keyboard-focus` | Mixin applied to a raised button after it's been focused using the keyboard | `{}`
+
+@demo demo/index.html
+-->
+
+<dom-module id="paper-button" assetpath="../bower_components/paper-button/">
+  <template strip-whitespace="">
+    <style include="paper-material">
+      /* Need to specify the same specificity as the styles imported from paper-material. */
+      :host, :host(.paper-material) {
+        @apply --layout-inline;
+        @apply --layout-center-center;
+        position: relative;
+        box-sizing: border-box;
+        min-width: 5.14em;
+        margin: 0 0.29em;
+        background: transparent;
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+        -webkit-tap-highlight-color: transparent;
+        font: inherit;
+        text-transform: uppercase;
+        outline-width: 0;
+        border-radius: 3px;
+        -moz-user-select: none;
+        -ms-user-select: none;
+        -webkit-user-select: none;
+        user-select: none;
+        cursor: pointer;
+        z-index: 0;
+        padding: 0.7em 0.57em;
+
+        @apply --paper-font-common-base;
+        @apply --paper-button;
+      }
+
+      :host([hidden]) {
+        display: none !important;
+      }
+
+      :host([raised].keyboard-focus) {
+        font-weight: bold;
+        @apply --paper-button-raised-keyboard-focus;
+      }
+
+      :host(:not([raised]).keyboard-focus) {
+        font-weight: bold;
+        @apply --paper-button-flat-keyboard-focus;
+      }
+
+      :host([disabled]) {
+        background: #eaeaea;
+        color: #a8a8a8;
+        cursor: auto;
+        pointer-events: none;
+
+        @apply --paper-button-disabled;
+      }
+
+      :host([animated]) {
+        @apply --shadow-transition;
+      }
+
+      paper-ripple {
+        color: var(--paper-button-ink-color);
+      }
+    </style>
+
+    <slot></slot>
+  </template>
+
+  <script>
+    Polymer({
+      is: 'paper-button',
+
+      behaviors: [
+        Polymer.PaperButtonBehavior
+      ],
+
+      properties: {
+        /**
+         * If true, the button should be styled with a shadow.
+         */
+        raised: {
+          type: Boolean,
+          reflectToAttribute: true,
+          value: false,
+          observer: '_calculateElevation'
+        }
+      },
+
+      created: function() {
+        this.classList.add('paper-material');
+      },
+
+      _calculateElevation: function() {
+        if (!this.raised) {
+          this._setElevation(0);
+        } else {
+          Polymer.PaperButtonBehaviorImpl._calculateElevation.apply(this);
+        }
+      }
+
+      /**
+      Fired when the animation finishes.
+      This is useful if you want to wait until
+      the ripple animation finishes to perform some action.
+
+      @event transitionend
+      Event param: {{node: Object}} detail Contains the animated node.
+      */
+    });
+  </script>
+</dom-module>
+<dom-module id="bandit-reel">
+  <template>
+    <style>
+      :host {
+        display: inline-block;
+        margin: 0;
+        padding: 0;
+      }
+
+      .reelwindow {
+        width: 100%;
+        height: 0;
+        margin: 0;
+        padding: 0 0 300%;
+        overflow: hidden;
+      }
+
+      .reel {
+        display: block;
+        overflow: hidden;
+      }
+
+      @keyframes rollanim {
+        0%   { top: 0px; }
+        100% { top: 240vmin; }
+      }
+
+      @keyframes infinite-spinning {
+        from {
+          transform: translateY(0px);
+        }
+        to {
+          transform: translateY(-400px);
+        }
+      }
+
+      .rolling {
+        animation: infinite-spinning 20s infinite linear;
+        filter: url("#blur");
+      }
+
+      .item {
+        display: block;
+        margin: 0;
+        padding: 0;
+        background: white;
+      }
+
+      paper-button.hold {
+        width: 100%;
+        margin: 0.3em 0 0.3em;
+        background-color: #500;
+        color: white;
+      }
+      paper-button.hold[active] {
+        background-color: var(--paper-red-400);
+        color: white;
+      }
+      paper-button.hold[disabled] {
+        background-color: black;
+        color: gray;
+      }
+    </style>
+
+    <div class="reelwindow">
+      <div id="reel" class$="[[isBlurred(rolling)]]">
+        <template is="dom-repeat" items="[[reelSymbols(rolling)]]">
+            <img class="item" src="[[reelSymbol(item)]]">
+        </template>
+      </div>
+    </div>
+    <paper-button id="hold" toggles="" class="hold" disabled="" on-active-changed="holdChanged">HOLD</paper-button>
+    <svg width="0" height="0" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+        <filter id="blur">
+            <feGaussianBlur id="blur2" in="SourceGraphic" stddeviation$="0 45"></feGaussianBlur>
+        </filter>
+        </defs>
+    </svg>
+
+  </template>
+
+  <script>
+    class BanditReel extends Polymer.Element {
+      static get is() { return 'bandit-reel'; }
+
+      static get properties() {
+        return {
+          rolling: {
+            type: Boolean,
+            value: false,
+            observer: 'rollingChanged'
+          },
+          hold: {
+            type: Boolean,
+            value: false
+          },
+          canHold: {
+            type: Boolean,
+            value: false,
+            observer: 'canHoldChanged'
+          },
+          symbols: {
+            type: Array,
+            value: ['E','A','B','C','D','E','A','B','C','D']  // inline 'double up' to work nicely with rolling and showing (+ & - one in reel window)
+          },
+          currentSymbol: {
+            type: Number,
+            value: () => Math.floor(5 * Math.random())
+          }
+        }
+      }
+
+      rollingChanged() {
+        if(this.rolling) {
+          // TODO: weighted outcome (e.g. cherry >>> blackberry)
+          this.currentSymbol = Math.floor(5 * Math.random());
+        }
+      }
+
+      isBlurred() {
+        if(this.rolling) {
+          // todo - roll more nicely ;)
+          const speed = 30 + Math.random()*2;
+          const blurstr = `0 ${speed}`;
+          
+          console.log(blurstr);
+          this.$.blur2.setAttribute('stdDeviation', blurstr);
+          this.$.reel.style.animationDuration = `${100/speed}ms`;
+          return "rolling";
+        }
+        return "";
+      }
+
+      reelSymbol(item) {
+        return {
+          'A':'./src/bandit-cherry-simple.svg',
+          'B':'./src/bandit-pear-simple.svg',
+          'C':'./src/bandit-watermelon-simple.svg',
+          'D':'./src/bandit-orange-simple.svg',
+          'E':'./src/bandit-blackberry-simple.svg'
+        }[item];
+      }
+
+      reelSymbols() {
+        if(this.rolling) {
+          return this.symbols;
+        } else {
+          return this.symbols.slice(this.currentSymbol, this.currentSymbol+3);
+        }
+      }
+
+      holdChanged() {
+        this.hold = this.$.hold.active;
+      }
+
+      canHoldChanged(val) {
+        this.hold = false;
+        this.$.hold.active = false;
+        this.$.hold.disabled = !this.canHold;
+      }
+    }
+
+    window.customElements.define(BanditReel.is, BanditReel);
+  </script>
+</dom-module>
+<script>
+const AudioMixin = (_ => {
+    const _AudioMixin = subclass => class extends subclass {
+        static get properties() {
+            return {
+                audioMixinData: {
+                    type: Object,
+                    value: _AudioMixin["audioMixinData"],
+                }
+            }
+        }
+
+    connectedCallback() {
+      super.connectedCallback();
+      _AudioMixin["instances"].push(this);
+    }
+
+    disconnectedCallback() {
+      super.disconnectedCallback();
+      const i = _AudioMixin["instances"].indexOf(this);
+      if (i >= 0) {
+          _AudioMixin["instances"].splice(i, 1);
+      }
+    }
+
+    loadEffect(url, name) {
+        console.log(this.data);
+        var getSound = new XMLHttpRequest();
+        getSound.open("GET", url, true);
+        getSound.responseType = "arraybuffer";
+        getSound.onload = _ => {
+            this.audioMixinData.ctx.decodeAudioData(getSound.response, buffer => {
+                this.audioMixinData.effects[name] = buffer;
+            });
+        }
+        getSound.send();
+    }
+
+    loadMusic(url, name) {
+        this.audioMixinData.music[name] = new Audio(url);
+    }
+
+    playMusic(name, loop, volume) {
+        // assuming Audio media element (TODO: stop music...)
+        var snd = this.audioMixinData.music[name];
+        if(!snd)
+            return;
+
+        if(volume) {
+            snd.volume = volume;
+        }
+
+        if(loop) {
+            if (typeof snd.loop == 'boolean')
+            {
+                snd.loop = true;
+            }
+            else
+            {
+                snd.addEventListener('ended', _ => {
+                    this.currentTime = 0;
+                    snd.play();
+                }, false);
+            }
+        }
+        snd.play();
+    }
+
+    muteMusic(name, muted) {
+        // assuming Audio media element
+        var snd = this.audioMixinData.music[name];
+        if(!snd)
+            return;
+
+        if(muted)
+            snd.pause();
+        else
+            snd.play();
+    }
+
+    playEffect(name) {
+        console.log("[playEffect] ", name);
+        if(this.audioMixinData.muted)
+            return;
+
+        var snd = this.audioMixinData.effects[name];
+        if(!snd)
+            return;
+        // WebAudio...
+        var playSound = this.audioMixinData.ctx.createBufferSource();
+        playSound.buffer = snd;
+        playSound.connect(this.audioMixinData.ctx.destination);
+        playSound.start(0);
+    }
+
+    setMute(muted) {
+        this.audioMixinData.muted = muted;
+
+        this.muteMusic('theme', muted); // todo handle other music than 'theme' (e.g. remember last music played)
+    }
+
+  };
+
+  Object.defineProperty(_AudioMixin, "audioMixinData", {
+    value: {
+        effects: {},
+        music: {},
+        muted: false,
+        ctx: new (window.AudioContext || window.webkitAudioContext)()
+    },
+    writable: false,
+    enumerable: false,
+    configurable: false
+  });
+  Object.defineProperty(_AudioMixin, "instances", {
+    value: [],
+    writable: false,
+    enumerable: false,
+    configurable: false
+  });
+
+  _AudioMixin.notifyPath = function(path) {
+    _AudioMixin["instances"].forEach(instance => instance.notifyPath(path))
+  }
+
+  return _AudioMixin;
+})();
+
+</script>
+</div><dom-module id="game-page">
+  <template>
+    <style>
+      :host {
+        display: block;
+        padding: 10px;
+      }
+
+      .machine {
+        display:flex;
+        width: 100%;
+        justify-content:center;
+        align-content: center;
+      }
+
+      .game {
+        display:flex;
+        flex-direction: column;
+        width: 90%;
+        max-width: 30em;
+        justify-content:center;
+        align-content: center;
+      }
+
+      .creds {
+        display: block;
+        width: 100%;
+        text-align: center;
+        font-family: 'Roboto', 'Noto', sans-serif;
+        font-size: 9vmin;
+        color: white;
+        text-shadow: 0 0 10px black;
+      }
+
+      .reels {
+        display:flex;
+        flex-direction: row;
+      }
+
+      bandit-reel {
+        flex: 1;
+        margin: 0 5px 0;
+      }
+
+      paper-button.roll {
+        background-color: var(--paper-green-500);
+      }
+    </style>
+
+    <div class="machine">
+      <div class="game">
+        <div class="creds">[[creds]]</div>
+        <div class="reels">
+          <bandit-reel id="reel1" can-hold="[[canHold]]"></bandit-reel>
+          <bandit-reel id="reel2" can-hold="[[canHold]]"></bandit-reel>
+          <bandit-reel id="reel3" can-hold="[[canHold]]"></bandit-reel>
+        </div>
+        <paper-button raised="" class="roll" on-tap="doRoll">ROLL</paper-button>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    const winSeq = {
+      'S444': 64,
+      'S333': 32,
+      'S222': 16,
+      'S111': 8,
+      'S000': 4,
+      'S00X': 2,
+      'S0XX': 1
+    };
+
+    class GamePage extends AudioMixin(Polymer.Element) {
+      static get is() { return 'game-page'; }
+
+      static get properties() {
+        return {
+          canHold: {
+            type: Boolean,
+            value: false
+          },
+          reelsHeld: {
+            type: Number,
+            value: 0
+          },
+          creds: {
+            type: Number,
+            value: 100
+          }
+        }
+      }
+
+      connectedCallback() {
+        super.connectedCallback();
+        requestAnimationFrame(this._initgame.bind(this));
+      }
+
+      _initgame() {
+        this.loadEffect('./sounds/win.ogg', 'win')
+        this.loadEffect('./sounds/reelstop.ogg', 'reelstop')
+        this.loadEffect('./sounds/start.ogg', 'start')
+      }
+
+
+      doRoll() {
+        console.log("rollin...");
+        let td = 0, inSpin = 0
+        this.reelsHeld = 0;
+        [this.$.reel1,this.$.reel2,this.$.reel3].forEach(reel => {
+          if(!reel.hold) {
+            reel.rolling = true;
+            inSpin++;
+            setTimeout(_ => { reel.rolling = false; this.playEffect('reelstop'); this.checkReels(--inSpin) }, td+=1200)
+          } else {
+            this.reelsHeld++;
+          }
+        });
+
+        if(this.reelsHeld === 3) {
+          // special case... shouldn't happen... just remove hold
+          // do nothing for now...
+        } else {
+          this.playEffect('start');
+          this.creds--;
+        }
+      }
+
+      checkReels(inSpin) {
+        console.log("inSpin",inSpin)
+        if(!!inSpin) return;
+        let reelSeq = `S${this.$.reel1.currentSymbol}${this.$.reel2.currentSymbol}${this.$.reel3.currentSymbol}`;
+
+        // Special case for cherries
+        if(reelSeq.charAt(1) === '0') {
+          if(reelSeq.charAt(2) !== '0') {
+            reelSeq = 'S0XX';
+          } else if(reelSeq.charAt(3) !== '0') {
+            reelSeq = 'S00X';
+          }
+        }
+
+        console.log("SEQ", reelSeq);
+
+        const winning = winSeq[reelSeq];
+
+        if(winning) {
+          setTimeout(_ => { this.playEffect('win') }, 200);
+          this.creds += winning;
+          this.canHold = false;
+        } else {
+          this.canHold = this.reelsHeld === 0
+        }
+
+      }
+    }
+
+    window.customElements.define(GamePage.is, GamePage);
+  </script>
+</dom-module>
+</body></html>
