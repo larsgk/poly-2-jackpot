@@ -1,0 +1,165 @@
+<link rel="import" href="../bower_components/polymer/polymer-element.html">
+<link rel="import" href="../bower_components/paper-button/paper-button.html">
+<link rel="import" href="bandit-reel.html">
+<link rel="import" href="audio-mixin.html">
+
+<dom-module id="game-page">
+  <template>
+    <style>
+      :host {
+        display: block;
+        padding: 10px;
+      }
+
+      .machine {
+        display:flex;
+        width: 100%;
+        justify-content:center;
+        align-content: center;
+      }
+
+      .game {
+        display:flex;
+        flex-direction: column;
+        width: 90%;
+        max-width: 30em;
+        justify-content:center;
+        align-content: center;
+      }
+
+      .creds {
+        display: block;
+        width: 100%;
+        text-align: center;
+        font-family: 'Roboto', 'Noto', sans-serif;
+        font-size: 9vmin;
+        color: white;
+        text-shadow: 0 0 10px black;
+      }
+
+      .reels {
+        display:flex;
+        flex-direction: row;
+      }
+
+      bandit-reel {
+        flex: 1;
+        margin: 0 5px 0;
+      }
+
+      paper-button.roll {
+        background-color: var(--paper-green-500);
+      }
+    </style>
+
+    <div class="machine">
+      <div class="game">
+        <div class="creds">[[creds]]</div>
+        <div class="reels">
+          <bandit-reel id="reel1" can-hold="[[canHold]]"></bandit-reel>
+          <bandit-reel id="reel2" can-hold="[[canHold]]"></bandit-reel>
+          <bandit-reel id="reel3" can-hold="[[canHold]]"></bandit-reel>
+        </div>
+        <paper-button raised class="roll" on-tap="doRoll">ROLL</paper-button>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    const winSeq = {
+      'S444': 64,
+      'S333': 32,
+      'S222': 16,
+      'S111': 8,
+      'S000': 4,
+      'S00X': 2,
+      'S0XX': 1
+    };
+
+    class GamePage extends AudioMixin(Polymer.Element) {
+      static get is() { return 'game-page'; }
+
+      static get properties() {
+        return {
+          canHold: {
+            type: Boolean,
+            value: false
+          },
+          reelsHeld: {
+            type: Number,
+            value: 0
+          },
+          creds: {
+            type: Number,
+            value: 100
+          }
+        }
+      }
+
+      connectedCallback() {
+        super.connectedCallback();
+        requestAnimationFrame(this._initgame.bind(this));
+      }
+
+      _initgame() {
+        this.loadEffect('./sounds/win.ogg', 'win')
+        this.loadEffect('./sounds/reelstop.ogg', 'reelstop')
+        this.loadEffect('./sounds/start.ogg', 'start')
+      }
+
+
+      doRoll() {
+        console.log("rollin...");
+        let td = 0, inSpin = 0
+        this.reelsHeld = 0;
+        [this.$.reel1,this.$.reel2,this.$.reel3].forEach(reel => {
+          if(!reel.hold) {
+            reel.rolling = true;
+            inSpin++;
+            setTimeout(_ => { reel.rolling = false; this.playEffect('reelstop'); this.checkReels(--inSpin) }, td+=1200)
+          } else {
+            this.reelsHeld++;
+          }
+        });
+
+        if(this.reelsHeld === 3) {
+          // special case... shouldn't happen... just remove hold
+          // do nothing for now...
+        } else {
+          this.playEffect('start');
+          this.creds--;
+        }
+      }
+
+      checkReels(inSpin) {
+        console.log("inSpin",inSpin)
+        if(!!inSpin) return;
+        let reelSeq = `S${this.$.reel1.currentSymbol}${this.$.reel2.currentSymbol}${this.$.reel3.currentSymbol}`;
+
+        // Special case for cherries
+        if(reelSeq.charAt(1) === '0') {
+          if(reelSeq.charAt(2) !== '0') {
+            reelSeq = 'S0XX';
+          } else if(reelSeq.charAt(3) !== '0') {
+            reelSeq = 'S00X';
+          }
+        }
+
+        console.log("SEQ", reelSeq);
+
+        const winning = winSeq[reelSeq];
+
+        if(winning) {
+          setTimeout(_ => { this.playEffect('win') }, 200);
+          this.creds += winning;
+          this.canHold = false;
+        } else {
+          this.canHold = this.reelsHeld === 0
+        }
+
+      }
+    }
+
+    window.customElements.define(GamePage.is, GamePage);
+  </script>
+</dom-module>

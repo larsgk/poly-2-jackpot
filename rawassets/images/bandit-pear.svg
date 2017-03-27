@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   xmlns:dc="http://purl.org/dc/elements/1.1/"
+   xmlns:cc="http://creativecommons.org/ns#"
+   xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   viewBox="0 0 256 256"
+   version="1.1"
+   id="svg4"
+   sodipodi:docname="bandit-pear.svg"
+   inkscape:version="0.92.1 unknown">
+  <metadata
+     id="metadata10">
+    <rdf:RDF>
+      <cc:Work
+         rdf:about="">
+        <dc:format>image/svg+xml</dc:format>
+        <dc:type
+           rdf:resource="http://purl.org/dc/dcmitype/StillImage" />
+        <dc:title></dc:title>
+      </cc:Work>
+    </rdf:RDF>
+  </metadata>
+  <defs
+     id="defs8" />
+  <sodipodi:namedview
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1"
+     objecttolerance="10"
+     gridtolerance="10"
+     guidetolerance="10"
+     inkscape:pageopacity="0"
+     inkscape:pageshadow="2"
+     inkscape:window-width="1920"
+     inkscape:window-height="1025"
+     id="namedview6"
+     showgrid="false"
+     inkscape:zoom="0.921875"
+     inkscape:cx="-81.355932"
+     inkscape:cy="128"
+     inkscape:window-x="0"
+     inkscape:window-y="27"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg4" />
+  <path
+     d="m 155.27703,215.25707 c -18.18264,14.75254 -40.6236,20.73847 -62.20701,18.4906 C 71.486598,231.49982 50.760721,221.01816 36.008188,202.83552 21.255656,184.65286 15.269711,162.21192 17.517573,140.62851 19.765424,119.0451 30.247082,98.319195 48.429727,83.566668 66.612372,68.814138 91.317036,65.618247 112.90046,67.866103 c 21.58341,2.24786 62.76564,-31.628099 88.69979,-3.085464 25.93416,28.542632 -17.76423,71.862851 -20.01209,93.446271 -2.24786,21.58342 -8.12849,42.27763 -26.31113,57.03016 z"
+     id="circle2"
+     inkscape:connector-curvature="0"
+     sodipodi:nodetypes="sssssszss"
+     style="fill:#4caf50;stroke-width:0.6624372" />
+  <path
+     style="fill:none;fill-rule:evenodd;stroke:#4e342e;stroke-width:5.2994976;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+     d="m 195.46214,69.7608 c 7.96304,-6.152396 16.54972,-11.835865 22.98367,-19.57321 6.39923,-7.695582 10.28267,-16.979406 14.97127,-26.027119"
+     id="path4525"
+     inkscape:connector-curvature="0"
+     sodipodi:nodetypes="cac" />
+</svg>

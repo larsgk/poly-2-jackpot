@@ -1,0 +1,22 @@
+<link rel="import" href="../bower_components/polymer/polymer-element.html">
+
+<dom-module id="info-page">
+  <template>
+    <style>
+      :host {
+        display: block;
+        padding: 10px;
+      }
+    </style>
+      <h3>Jackpot!</h3>
+      <p>A small slot machine demo done with Polymer 2 (RC3)</p>
+  </template>
+
+  <script>
+    class InfoPage extends Polymer.Element {
+      static get is() { return 'info-page'; }
+    }
+
+    window.customElements.define(InfoPage.is, InfoPage);
+  </script>
+</dom-module>
