@@ -60,7 +60,7 @@
           <bandit-reel id="reel2" can-hold="[[canHold]]"></bandit-reel>
           <bandit-reel id="reel3" can-hold="[[canHold]]"></bandit-reel>
         </div>
-        <paper-button raised class="roll" on-tap="doRoll">ROLL</paper-button>
+        <paper-button id="rollbtn" raised class="roll" on-tap="doRoll">ROLL</paper-button>
       </div>
     </div>
   </template>
@@ -127,6 +127,7 @@
           // do nothing for now...
         } else {
           this.playEffect('start');
+          this.$.rollbtn.disabled = true;
           this.creds--;
         }
       }
@@ -145,6 +146,8 @@
           }
         }
 
+        this.$.rollbtn.disabled = false;
+        
         console.log("SEQ", reelSeq);
 
         const winning = winSeq[reelSeq];
