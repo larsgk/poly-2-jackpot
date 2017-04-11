@@ -24,7 +24,6 @@ const AudioMixin = (_ => {
     }
 
     loadEffect(url, name) {
-        console.log(this.data);
         var getSound = new XMLHttpRequest();
         getSound.open("GET", url, true);
         getSound.responseType = "arraybuffer";

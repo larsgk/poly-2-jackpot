@@ -6,6 +6,10 @@
     <title>Jackpot!</title>
     <meta name="description" content="Polymer 2 Jackpot game">
 
+    <!--<base href="/">-->
+    <!--<base href="http://localhost:8000/default/">-->
+    <base href="https://larsgk.github.io/poly-2-jackpot/">
+
     <link rel="icon" href="./images/favicon.ico">
 
     <link rel="manifest" href="./manifest.json">
@@ -36,8 +40,9 @@
     <!-- Load and register pre-caching Service Worker -->
     <script>
       if ('serviceWorker' in navigator) {
+        const baseUrl = document.querySelector('base').href;
         window.addEventListener('load', function() {
-          navigator.serviceWorker.register('./service-worker.js');
+          //navigator.serviceWorker.register(baseUrl + 'service-worker.js');
         });
       }
     </script>

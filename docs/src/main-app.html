@@ -19950,15 +19950,15 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
     </style>
 
-    <app-location route="{{route}}"></app-location>
-    <app-route route="{{route}}" pattern="/:page" data="{{routeData}}" tail="{{subroute}}"></app-route>
+    <app-location route="{{route}}" use-hash-as-path=""></app-location>
+    <app-route route="{{route}}" pattern="[[rootPattern]]:page" data="{{routeData}}" tail="{{subroute}}"></app-route>
 
     <app-drawer-layout fullbleed="">
       <app-drawer id="drawer" slot="drawer">
         <app-toolbar>Menu</app-toolbar>
         <iron-selector selected="[[page]]" attr-for-selected="name" class="drawer-list" role="navigation">
-          <a name="game" href="./game">Game</a>
-          <a name="info" href="./info">Info</a>
+          <a name="game" href="#/game">Game</a>
+          <a name="info" href="#/info">Info</a>
         </iron-selector>
       </app-drawer>
 
@@ -19989,6 +19989,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           page: {
             type: String,
             reflectToAttribute: true,
+            value: 'game',
             observer: '_pageChanged',
           },
         };
@@ -19999,6 +20000,12 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           '_routePageChanged(routeData.page)',
         ];
       }
+
+      constructor() {
+        super();
+        this.rootPattern = (new URL(this.rootPath)).pathname;
+      }
+
 
       _routePageChanged(page) {
         // Polymer 2.0 will call with `undefined` on initialization.
