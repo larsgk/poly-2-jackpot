@@ -801,9 +801,17 @@ const AudioMixin = (_ => {
       }
 
       _initgame() {
-        this.loadEffect('./sounds/win.ogg', 'win')
-        this.loadEffect('./sounds/reelstop.ogg', 'reelstop')
-        this.loadEffect('./sounds/start.ogg', 'start')
+        const obj = document.createElement('audio');
+        const canOgg = obj.canPlayType('audio/ogg');
+        if(canOgg.length) {
+          this.loadEffect('./sounds/win.ogg', 'win')
+          this.loadEffect('./sounds/reelstop.ogg', 'reelstop')
+          this.loadEffect('./sounds/start.ogg', 'start')
+        } else {
+          this.loadEffect('./sounds/win.mp3', 'win')
+          this.loadEffect('./sounds/reelstop.mp3', 'reelstop')
+          this.loadEffect('./sounds/start.mp3', 'start')
+        }
 
         window.addEventListener("deviceorientation", this._handleOrientation.bind(this), true);
       }
