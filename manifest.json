@@ -2,7 +2,8 @@
   "name": "Jackpot!",
   "short_name": "Jackpot!",
   "start_url": "./?homescreen=1",
-  "display": "standalone",
+  "display": "fullscreen",
+  "orientation": "portrait",
   "theme_color": "#3f51b5",
   "background_color": "#3f51b5",
   "icons": [
@@ -16,6 +17,5 @@
       "sizes": "512x512",
       "type": "image/png"
     }
-  ],
-  "orientation": "portrait-primary"
+  ]
 }
