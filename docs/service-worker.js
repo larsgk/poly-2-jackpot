@@ -37,7 +37,7 @@
 /* eslint-disable indent, no-unused-vars, no-multiple-empty-lines, max-nested-callbacks, space-before-function-paren, quotes, comma-spacing */
 'use strict';
 
-var precacheConfig = [["/index.html","3a4890abf0502ec8c521e8aebc9f001d"],["/src/game-page.html","43255f5fd54b1fb0da6b4864c2261b1b"],["/src/info-page.html","8f2a2384faf548a83d26f2cc88e370a7"],["/src/main-app.html","c3118762d2c467da0d400672684f19d5"]];
+var precacheConfig = [["/index.html","bef4e84bf85acbc5a2068eea9e59f339"],["/src/game-page.html","7e933b565b541fd8e1736db5a20be277"],["/src/info-page.html","6031bac07e63c59d3fce23e7cd7d6d7d"],["/src/main-app.html","53e9da2f4ecca365e822d0fa9fa78b45"]];
 var cacheName = 'sw-precache-v2--' + (self.registration ? self.registration.scope : '');
 
 

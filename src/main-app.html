@@ -66,10 +66,10 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     <app-location route="{{route}}" use-hash-as-path></app-location>
     <app-route
         route="{{route}}"
-        pattern="[[rootPattern]]:page"
+        pattern="/:page"
         data="{{routeData}}"
         tail="{{subroute}}"></app-route>
-
+   
     <app-drawer-layout fullbleed>
       <app-drawer id="drawer" slot="drawer">
         <app-toolbar>Menu</app-toolbar>
@@ -110,8 +110,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           page: {
             type: String,
             reflectToAttribute: true,
-            value: 'game',
             observer: '_pageChanged',
+            value: "game"
           },
         };
       }
@@ -124,17 +124,19 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       constructor() {
         super();
-        this.rootPattern = (new URL(this.rootPath)).pathname;
       }
 
+      doPrint(obj) {
+        return JSON.stringify(obj);
+      }
 
       _routePageChanged(page) {
+        console.log('routePageChanged',page, this.page);
         // Polymer 2.0 will call with `undefined` on initialization.
         // Ignore until we are properly called with a string.
         if (page === undefined) {
           return;
         }
-
         // If no page was found in the route data, page will be an empty string.
         // Deault to 'view1' in that case.
         this.page = page || 'game';
@@ -146,6 +148,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
 
       _pageChanged(page) {
+        console.log('pageChanged',page, this.page);
         var resolvedPageUrl = this.resolveUrl(page + '-page.html');
         Polymer.importHref(
             resolvedPageUrl,

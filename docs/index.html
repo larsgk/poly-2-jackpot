@@ -7,7 +7,7 @@
     <meta name="description" content="Polymer 2 Jackpot game">
 
     <!--<base href="/">-->
-    <!--<base href="http://localhost:8000/default/">-->
+    <!--<base href="http://localhost:8000/build/default/">-->
     <base href="https://larsgk.github.io/poly-2-jackpot/">
 
     <link rel="icon" href="./images/favicon.ico">
@@ -42,7 +42,7 @@
       if ('serviceWorker' in navigator) {
         const baseUrl = document.querySelector('base').href;
         window.addEventListener('load', function() {
-          //navigator.serviceWorker.register(baseUrl + 'service-worker.js');
+          navigator.serviceWorker.register(baseUrl + 'service-worker.js');
         });
       }
     </script>

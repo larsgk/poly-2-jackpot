@@ -81,16 +81,6 @@
 
       static get properties() {
         return {
-          orientation: {
-            type: Object,
-            value: _ => {
-              return {
-                alpha: 0,
-                beta: 90,
-                gamma: 0
-              }
-            }
-          },
           stickPulled: {
             type: Boolean,
             value: false,
@@ -125,16 +115,12 @@
       }
 
       _handleOrientation(evt) {
-        this.orientation.alpha  = this.orientation.alpha * 0.75 + evt.alpha * 0.25;
-        this.orientation.beta   = this.orientation.beta * 0.75  + evt.beta * 0.25;
-        this.orientation.gamma  = this.orientation.gamma * 0.75 + evt.gamma * 0.25;
-
-        if(this.orientation.beta < 70 || this.orientation.beta > 110)
+        if(evt.beta < 70 || evt.beta > 110)
           return;
 
-        if((this.orientation.gamma < -50 || this.orientation.gamma > 50) && !this.stickPulled) {
+        if((evt.gamma < -50 || evt.gamma > 50) && !this.stickPulled) {
           this.stickPulled = true;
-        } else if((this.orientation.gamma > -40 && this.orientation.gamma < 40) && this.stickPulled) {
+        } else if((evt.gamma > -40 && evt.gamma < 40) && this.stickPulled) {
           this.stickPulled = false;
         }
       }

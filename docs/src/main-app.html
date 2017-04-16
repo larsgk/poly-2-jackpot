@@ -121,9 +121,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   Polymer.dedupingMixin = function(mixin) {
     mixin = cachingMixin(mixin);
     // maintain a unique id for each mixin
-    if (!mixin.__id) {
-      mixin.__dedupeId = ++dedupeId;
-    }
+    mixin.__dedupeId = ++dedupeId;
     return function(base) {
       let baseSet = base.__mixinSet;
       if (baseSet && baseSet[mixin.__dedupeId]) {
@@ -1134,7 +1132,10 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * the standard `static get observedAttributes()`, implement `_propertiesChanged`
    * on the class, and then call `MyClass.createPropertiesForAttributes()` once
    * on the class to generate property accessors for each observed attribute
-   * prior to instancing.  Any `observedAttributes` will automatically be
+   * prior to instancing.  Last, call `this._flushProperties()` once to enable
+   * the accessors.
+   *
+   * Any `observedAttributes` will automatically be
    * deserialized via `attributeChangedCallback` and set to the associated
    * property using `dash-case`-to-`camelCase` convention.
    *
@@ -1184,6 +1185,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       _initializeProperties() {
         this.__serializing = false;
         this.__dataCounter = 0;
+        this.__dataInitialized = false;
         this.__dataInvalid = false;
         // initialize data with prototype values saved when creating accessors
         this.__data = {};
@@ -1191,6 +1193,17 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         this.__dataOld = null;
         if (this.__dataProto) {
           this._initializeProtoProperties(this.__dataProto);
+          this.__dataProto = null;
+        }
+        // Capture instance properties; these will be set into accessors
+        // during first flush. Don't set them here, since we want
+        // these to overwrite defaults/constructor assignments
+        for (let p in this.__dataHasAccessor) {
+          if (this.hasOwnProperty(p)) {
+            this.__dataInstanceProps = this.__dataInstanceProps || {};
+            this.__dataInstanceProps[p] = this[p];
+            delete this[p];
+          }
         }
       }
 
@@ -1210,6 +1223,22 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         for (let p in props) {
           this._setProperty(p, props[p]);
         }
+      }
+
+      /**
+       * Called at ready time with bag of instance properties that overwrote
+       * accessors when the element upgraded.
+       *
+       * The default implementation sets these properties back into the
+       * setter at ready time.  This method is provided as an override
+       * point for customizing or providing more efficient initialization.
+       *
+       * @param {Object} props Bag of property values that were overwritten
+       *   when creating property accessors.
+       * @protected
+       */
+      _initializeInstanceProperties(props) {
+        Object.assign(this, props);
       }
 
       /**
@@ -1362,7 +1391,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
               outValue = JSON.parse(value);
             } catch(x) {
               outValue = null;
-              console.warn('Polymer::Attributes: couldn`t decode Array as JSON');
+              console.warn(`Polymer::Attributes: couldn't decode Array as JSON: ${value}`);
             }
             break;
 
@@ -1402,15 +1431,31 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @protected
        */
       _createPropertyAccessor(property, readOnly) {
-        saveAccessorValue(this, property);
-        Object.defineProperty(this, property, {
-          get: function() {
-            return this.__data[property];
-          },
-          set: readOnly ? function() { } : function(value) {
-            this._setProperty(property, value);
-          }
-        });
+        if (!this.hasOwnProperty('__dataHasAccessor')) {
+          this.__dataHasAccessor = Object.assign({}, this.__dataHasAccessor);
+        }
+        if (!this.__dataHasAccessor[property]) {
+          this.__dataHasAccessor[property] = true;
+          saveAccessorValue(this, property);
+          Object.defineProperty(this, property, {
+            get: function() {
+              return this.__data[property];
+            },
+            set: readOnly ? function() { } : function(value) {
+              this._setProperty(property, value);
+            }
+          });
+        }
+      }
+
+      /**
+       * Returns true if this library created an accessor for the given property.
+       *
+       * @param {string} property Property name
+       * @return {boolean} True if an accessor was created
+       */
+      _hasAccessor(property) {
+        return this.__dataHasAccessor && this.__dataHasAccessor[property];
       }
 
       /**
@@ -1472,7 +1517,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @protected
        */
       _invalidateProperties() {
-        if (!this.__dataInvalid) {
+        if (!this.__dataInvalid && this.__dataInitialized) {
           this.__dataInvalid = true;
           microtask.run(() => {
             if (this.__dataInvalid) {
@@ -1488,15 +1533,48 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * pending changes (and old values recorded when pending changes were
        * set), and resets the pending set of changes.
        *
+       * Note that this method must be called once to enable the property
+       * accessors system.  For elements, generally `connectedCallback`
+       * is a normal spot to do so.
+       *
        * @protected
        */
       _flushProperties() {
-        let oldProps = this.__dataOld;
-        let changedProps = this.__dataPending;
-        this.__dataPending = null;
-        this.__dataCounter++;
-        this._propertiesChanged(this.__data, changedProps, oldProps);
-        this.__dataCounter--;
+        if (!this.__dataInitialized) {
+          this.ready()
+        } else if (this.__dataPending) {
+          let changedProps = this.__dataPending;
+          this.__dataPending = null;
+          this.__dataCounter++;
+          this._propertiesChanged(this.__data, changedProps, this.__dataOld);
+          this.__dataCounter--;
+        }
+      }
+
+      /**
+       * Lifecycle callback called the first time properties are being flushed.
+       * Prior to `ready`, all property sets through accessors are queued and
+       * their effects are flushed after this method returns.
+       *
+       * Users may override this function to implement behavior that is
+       * dependent on the element having its properties initialized, e.g.
+       * from defaults (initialized from `constructor`, `_initializeProperties`),
+       * `attributeChangedCallback`, or values propagated from host e.g. via
+       * bindings.  `super.ready()` must be called to ensure the data system
+       * becomes enabled.
+       *
+       * @public
+       */
+      ready() {
+        // Update instance properties that shadowed proto accessors; these take
+        // priority over any defaults set in constructor or attributeChangedCallback
+        if (this.__dataInstanceProps) {
+          this._initializeInstanceProperties(this.__dataInstanceProps);
+          this.__dataInstanceProps = null;
+        }
+        this.__dataInitialized = true;
+        // Run normal flush
+        this._flushProperties();
       }
 
       /**
@@ -1561,198 +1639,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
   'use strict';
 
-  // null-array (shared empty array to avoid null-checks)
-  const emptyArray = [];
-
-  let bindingRegex = (function() {
-    let IDENT  = '(?:' + '[a-zA-Z_$][\\w.:$\\-*]*' + ')';
-    let NUMBER = '(?:' + '[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?' + ')';
-    let SQUOTE_STRING = '(?:' + '\'(?:[^\'\\\\]|\\\\.)*\'' + ')';
-    let DQUOTE_STRING = '(?:' + '"(?:[^"\\\\]|\\\\.)*"' + ')';
-    let STRING = '(?:' + SQUOTE_STRING + '|' + DQUOTE_STRING + ')';
-    let ARGUMENT = '(?:' + IDENT + '|' + NUMBER + '|' +  STRING + '\\s*' + ')';
-    let ARGUMENTS = '(?:' + ARGUMENT + '(?:,\\s*' + ARGUMENT + ')*' + ')';
-    let ARGUMENT_LIST = '(?:' + '\\(\\s*' +
-                                  '(?:' + ARGUMENTS + '?' + ')' +
-                                '\\)\\s*' + ')';
-    let BINDING = '(' + IDENT + '\\s*' + ARGUMENT_LIST + '?' + ')'; // Group 3
-    let OPEN_BRACKET = '(\\[\\[|{{)' + '\\s*';
-    let CLOSE_BRACKET = '(?:]]|}})';
-    let NEGATE = '(?:(!)\\s*)?'; // Group 2
-    let EXPRESSION = OPEN_BRACKET + NEGATE + BINDING + CLOSE_BRACKET;
-    return new RegExp(EXPRESSION, "g");
-  })();
-
-  let insertionPointTag = 'slot';
-
-  /**
-   * Scans a template to produce an annotation map that stores expression metadata
-   * and information that associates the metadata to nodes in a template instance.
-   *
-   * Supported annotations are:
-   *   * id attributes
-   *   * binding annotations in text nodes
-   *     * double-mustache expressions: {{expression}}
-   *     * double-bracket expressions: [[expression]]
-   *   * binding annotations in attributes
-   *     * attribute-bind expressions: name="{{expression}} || [[expression]]"
-   *     * property-bind expressions: name*="{{expression}} || [[expression]]"
-   *     * property-bind expressions: name:="expression"
-   *   * event annotations
-   *     * event delegation directives: on-<eventName>="expression"
-   *
-   * Generated data-structure:
-   *   [
-   *     {
-   *       id: '<id>',
-   *       events: [
-   *         {
-   *           mode: ['auto'|''],
-   *           name: '<name>'
-   *           value: '<expression>'
-   *         }, ...
-   *       ],
-   *       bindings: [
-   *         {
-   *           kind: ['text'|'attribute'|'property'],
-   *           mode: ['auto'|''],
-   *           name: '<name>'
-   *           value: '<expression>'
-   *         }, ...
-   *       ],
-   *       parent: <reference to parent annotation>,
-   *       index: <integer index in parent's childNodes collection>
-   *     },
-   *     ...
-   *   ]
-   *
-   * @param {HTMLTemplateElement} template
-   * @param {boolean=} stripWhiteSpace
-   * @return {Array<Object>}
-   */
-  function parseTemplateAnnotations(template, stripWhiteSpace, ownerDocument) {
-    // TODO(kschaaf): File issue and/or remove when fixed
-    // hold a reference to content as _content to prevent odd Chrome gc issue
-    // nested templates also may receive their content as _content
-    let content = (template._content = template._content || template.content);
-    // since a template may be re-used, memo-ize notes.
-    if (!content._notes) {
-      content._notes = [];
-      // TODO(sorvell): whitespace and processAnnotations need to be factored
-      // into plugins
-      ownerDocument = ownerDocument || template.ownerDocument;
-      parseNodeAnnotations(content, content._notes,
-        stripWhiteSpace || template.hasAttribute('strip-whitespace'), ownerDocument);
-    }
-    return content._notes;
-  }
-
-  // add annotations gleaned from subtree at `node` to `list`
-  function parseNodeAnnotations(node, list, stripWhiteSpace, ownerDocument) {
-    return node.nodeType === Node.TEXT_NODE ?
-      parseTextNodeAnnotation(node, list) :
-        parseElementAnnotations(node, list, stripWhiteSpace, ownerDocument);
-  }
-
-  function parseBindings(text) {
-    let parts = [];
-    let lastIndex = 0;
-    let m;
-    // Example: "literal1{{prop}}literal2[[!compute(foo,bar)]]final"
-    // Regex matches:
-    //        Iteration 1:  Iteration 2:
-    // m[1]: '{{'          '[['
-    // m[2]: ''            '!'
-    // m[3]: 'prop'        'compute(foo,bar)'
-    while ((m = bindingRegex.exec(text)) !== null) {
-      // Add literal part
-      if (m.index > lastIndex) {
-        parts.push({literal: text.slice(lastIndex, m.index)});
-      }
-      // Add binding part
-      // Mode (one-way or two)
-      let mode = m[1][0];
-      let negate = Boolean(m[2]);
-      let value = m[3].trim();
-      let customEvent, notifyEvent, colon;
-      if (mode == '{' && (colon = value.indexOf('::')) > 0) {
-        notifyEvent = value.substring(colon + 2);
-        value = value.substring(0, colon);
-        customEvent = true;
-      }
-      parts.push({
-        compoundIndex: parts.length,
-        value: value,
-        mode: mode,
-        negate: negate,
-        event: notifyEvent,
-        customEvent: customEvent
-      });
-      lastIndex = bindingRegex.lastIndex;
-    }
-    // Add a final literal part
-    if (lastIndex && lastIndex < text.length) {
-      let literal = text.substring(lastIndex);
-      if (literal) {
-        parts.push({
-          literal: literal
-        });
-      }
-    }
-    if (parts.length) {
-      return parts;
-    }
-  }
-
-  function literalFromParts(parts) {
-    let s = '';
-    for (let i=0; i<parts.length; i++) {
-      let literal = parts[i].literal;
-      s += literal || '';
-    }
-    return s;
-  }
-
-  // add annotations gleaned from TextNode `node` to `list`
-  function parseTextNodeAnnotation(node, list) {
-    let parts = parseBindings(node.textContent);
-    if (parts) {
-      // Initialize the textContent with any literal parts
-      // NOTE: default to a space here so the textNode remains; some browsers
-      // (IE) evacipate an empty textNode following cloneNode/importNode.
-      node.textContent = literalFromParts(parts) || ' ';
-      let note = {
-        bindings: [{
-          kind: 'text',
-          name: 'textContent',
-          parts: parts,
-          isCompound: parts.length !== 1
-        }]
-      };
-      list.push(note);
-      return note;
-    }
-  }
-
-  // add annotations gleaned from Element `node` to `list`
-  function parseElementAnnotations(element, list, stripWhiteSpace, ownerDocument) {
-    let note = {
-      bindings: [],
-      events: []
-    };
-    if (element.localName === insertionPointTag) {
-      list._hasInsertionPoint = true;
-    }
-    parseChildNodesAnnotations(element, note, list, stripWhiteSpace, ownerDocument);
-    if (element.attributes) {
-      parseNodeAttributeAnnotations(element, note);
-    }
-    if (note.bindings.length || note.events.length || note.id) {
-      list.push(note);
-    }
-    return note;
-  }
-
   // 1.x backwards-compatible auto-wrapper for template type extensions
   // This is a clear layering violation and gives favored-nation status to
   // dom-if and dom-repeat templates.  This is a conceit we're choosing to keep
@@ -1780,159 +1666,15 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     return node;
   }
 
-  // add annotations gleaned from children of `root` to `list`, `root`'s
-  // `note` is supplied as it is the note.parent of added annotations
-  function parseChildNodesAnnotations(root, note, list, stripWhiteSpace, ownerDocument) {
-    if (root.firstChild) {
-      let node = root.firstChild;
-      let i = 0;
-      while (node) {
-        // Wrap templates
-        if (node.localName == 'template') {
-          node = wrapTemplateExtension(node);
-        }
-        // Recurse
-        if (node.localName == 'template' &&
-          !node.hasAttribute('preserve-content')) {
-          parseTemplate(node, i, list, note, stripWhiteSpace, ownerDocument);
-        }
-        // collapse adjacent textNodes: fixes an IE issue that can cause
-        // text nodes to be inexplicably split =(
-        // note that root.normalize() should work but does not so we do this
-        // manually.
-        let next = node.nextSibling;
-        if (node.nodeType === Node.TEXT_NODE) {
-          let n = next;
-          while (n && (n.nodeType === Node.TEXT_NODE)) {
-            node.textContent += n.textContent;
-            next = n.nextSibling;
-            root.removeChild(n);
-            n = next;
-          }
-          // optionally strip whitespace
-          if (stripWhiteSpace && !node.textContent.trim()) {
-            root.removeChild(node);
-            // decrement index since node is removed
-            i--;
-          }
-        }
-        // if this node didn't get evacipated, parse it.
-        if (node.parentNode) {
-          let childAnnotation = parseNodeAnnotations(node, list,
-            stripWhiteSpace, ownerDocument);
-          if (childAnnotation) {
-            childAnnotation.parent = note;
-            childAnnotation.index = i;
-          }
-        }
-        node = next;
-        i++;
-      }
-    }
-  }
-
-  // 1. Parse annotations from the template and memoize them on
-  //    content._notes (recurses into nested templates)
-  // 2. Remove template.content and store it in annotation list, where it
-  //    will be the responsibility of the host to set it back to the template
-  //    (this is both an optimization to avoid re-stamping nested template
-  //    children and avoids a bug in Chrome where nested template children
-  //    upgrade)
-  function parseTemplate(node, index, list, parent, stripWhiteSpace, ownerDocument) {
-    let content = node.content.ownerDocument.createDocumentFragment();
-    content._notes = parseTemplateAnnotations(node, stripWhiteSpace, ownerDocument);
-    content.appendChild(node.content);
-    list.push({
-      bindings: emptyArray,
-      events: emptyArray,
-      templateContent: content,
-      parent: parent,
-      index: index
-    });
-  }
-
-  // add annotation data from attributes to the `annotation` for node `node`
-  function parseNodeAttributeAnnotations(node, annotation) {
-    // Make copy of original attribute list, since the order may change
-    // as attributes are added and removed
-    let attrs = Array.prototype.slice.call(node.attributes);
-    for (let i=attrs.length-1, a; (a=attrs[i]); i--) {
-      let n = a.name;
-      let v = a.value;
-      let b;
-      // events (on-*)
-      if (n.slice(0, 3) === 'on-') {
-        node.removeAttribute(n);
-        annotation.events.push({
-          name: n.slice(3),
-          value: v
-        });
-      }
-      // bindings (other attributes)
-      else if ((b = parseNodeAttributeAnnotation(node, n, v))) {
-        annotation.bindings.push(b);
-      }
-      // static id
-      else if (n === 'id') {
-        annotation.id = v;
-      }
-    }
-  }
-
-  // construct annotation data from a generic attribute, or undefined
-  function parseNodeAttributeAnnotation(node, name, value) {
-    let parts = parseBindings(value);
-    if (parts) {
-      // Attribute or property
-      let origName = name;
-      let kind = 'property';
-      if (name[name.length-1] == '$') {
-        name = name.slice(0, -1);
-        kind = 'attribute';
-      }
-      // Initialize attribute bindings with any literal parts
-      let literal = literalFromParts(parts);
-      if (literal && kind == 'attribute') {
-        node.setAttribute(name, literal);
-      }
-      // Clear attribute before removing, since IE won't allow removing
-      // `value` attribute if it previously had a value (can't
-      // unconditionally set '' before removing since attributes with `$`
-      // can't be set using setAttribute)
-      if (node.localName === 'input' && origName === 'value') {
-        node.setAttribute(origName, '');
-      }
-      // Remove annotation
-      node.removeAttribute(origName);
-      // Case hackery: attributes are lower-case, but bind targets
-      // (properties) are case sensitive. Gambit is to map dash-case to
-      // camel-case: `foo-bar` becomes `fooBar`.
-      // Attribute bindings are excepted.
-      let propertyName = Polymer.CaseMap.dashToCamelCase(name);
-      if (kind === 'property') {
-        name = propertyName;
-      }
-      return {
-        kind: kind,
-        name: name,
-        propertyName: propertyName,
-        parts: parts,
-        literal: literal,
-        isCompound: parts.length !== 1
-      };
-    }
-  }
-
-  function findTemplateAnnotatedNode(root, note) {
+  function findTemplateNode(root, nodeInfo) {
     // recursively ascend tree until we hit root
-    let parent = note.parent && findTemplateAnnotatedNode(root,
-      note.parent);
+    let parent = nodeInfo.parentInfo && findTemplateNode(root, nodeInfo.parentInfo);
     // unwind the stack, returning the indexed node at each level
     if (parent) {
       // note: marginally faster than indexing via childNodes
       // (http://jsperf.com/childnodes-lookup)
       for (let n=parent.firstChild, i=0; n; n=n.nextSibling) {
-        if (note.index === i++) {
+        if (nodeInfo.parentIndex === i++) {
           return n;
         }
       }
@@ -1942,25 +1684,25 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   }
 
   // construct `$` map (from id annotations)
-  function applyIdToMap(inst, map, node, note) {
-    if (note.id) {
-      map[note.id] = node;
+  function applyIdToMap(inst, map, node, nodeInfo) {
+    if (nodeInfo.id) {
+      map[nodeInfo.id] = node;
     }
   }
 
   // install event listeners (from event annotations)
-  function applyEventListener(inst, node, note, host) {
-    if (note.events && note.events.length) {
-      for (let j=0, e$=note.events, e; (j<e$.length) && (e=e$[j]); j++) {
-        inst._addMethodEventListenerToNode(node, e.name, e.value, host);
+  function applyEventListener(inst, node, nodeInfo) {
+    if (nodeInfo.events && nodeInfo.events.length) {
+      for (let j=0, e$=nodeInfo.events, e; (j<e$.length) && (e=e$[j]); j++) {
+        inst._addMethodEventListenerToNode(node, e.name, e.value, inst);
       }
     }
   }
 
   // push configuration references at configure time
-  function applyTemplateContent(inst, node, note) {
-    if (note.templateContent) {
-      node._content = note.templateContent;
+  function applyTemplateContent(inst, node, nodeInfo) {
+    if (nodeInfo.templateInfo) {
+      node._templateInfo = nodeInfo.templateInfo;
     }
   }
 
@@ -1986,10 +1728,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * - Map of node id's to stamped node instances (`this.$.id`)
    * - Nested template content caching/removal and re-installation (performance
    *   optimization)
-   * - Relative URL's relative to original template location
-   * - Template binding annotation parsing (note that this library only parses
-   *   template bindings and provides annotation metadata; see
-   *   `Polymer.PropertyEffects` for a full implementation of data-binding)
    *
    * @polymerMixin
    * @memberof Polymer
@@ -1999,11 +1737,265 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
     return class TemplateStamp extends superClass {
 
-      constructor() {
-        super();
+      _initializeProperties() {
+        super._initializeProperties();
         this.$ = null;
-        this.__templateNodes = null;
-        this.__templateNotes = null;
+      }
+
+      /**
+       * Scans a template to produce template metadata.
+       *
+       * Template-specific metadata are stored in the object returned, and node-
+       * specific metadata are stored in objects in its flattened `nodeInfoList`
+       * array.  Only nodes in the template that were parsed as nodes of
+       * interest contain an object in `nodeInfoList`.  Each `nodeInfo` object
+       * contains an `index` (`childNodes` index in parent) and optionally
+       * `parent`, which points to node info of its parent (including its index).
+       *
+       * The template metadata object returned from this method has the following
+       * structure (many fields optional):
+       *
+       *   {
+       *     // Flattened list of node metadata (for nodes that generated metadata)
+       *     nodeInfoList: [
+       *       {
+       *         // `id` attribute for any nodes with id's for generating `$` map
+       *         id: '<id>',
+       *         // `on-event="handler"` metadata
+       *         events: [
+       *           {
+       *             name: '<name>'
+       *             value: '<handler name>'
+       *           }, ...
+       *         ],
+       *         // Notes when the template contained a `<slot>` for shady DOM
+       *         // optimization purposes
+       *         hasInsertionPoint: <boolean>,
+       *         // For nested <template> nodes, nested template metadata
+       *         templateInfo: <nested template metadata>,
+       *         // Metadata to allow efficient retrieval of instanced node
+       *         // corresponding to this metadata
+       *         parentInfo: <reference to parent nodeInfo>,
+       *         parentIndex: <integer index in parent's `childNodes` collection>
+       *         infoIndex: <integer index of this `nodeInfo` in `templateInfo.nodeInfoList`
+       *       },
+       *       ...
+       *     ],
+       *     // When true, the template had the `strip-whitespace` attribute
+       *     // or was nested in a template with that setting
+       *     stripWhitespace: <boolean>
+       *     // For nested templates, nested template content is moved into
+       *     // a document fragment stored here; this is an optimization to
+       *     // avoid the cost of nested template cloning
+       *     content: <DocumentFragment>
+       *   }
+       *
+       * This method kicks off a recursive treewalk as follows:
+       *
+       *    _parseTemplate <---------------------+
+       *      _parseTemplateContent              |
+       *        _parseTemplateNode  <------------|--+
+       *          _parseTemplateNestedTemplate --+  |
+       *          _parseTemplateChildNodes ---------+
+       *          _parseTemplateNodeAttributes
+       *            _parseTemplateNodeAttribute
+       *
+       * These methods may be overridden to add custom metadata about templates
+       * to either `templateInfo` or `nodeInfo`.
+       *
+       * Note that this method may be destructive to the template, in that
+       * e.g. event annotations may be removed after being noted in the
+       * template metadata.
+       *
+       * @param {HTMLTemplateElement} template Template to parse
+       * @param {Object=} outerTemplateInfo Template metadata from the outer
+       *   template, for parsing nested templates
+       * @return {Object} Parsed template metadata
+       */
+      static _parseTemplate(template, outerTemplateInfo) {
+        // since a template may be re-used, memo-ize metadata
+        if (!template._templateInfo) {
+          let templateInfo = template._templateInfo = {};
+          templateInfo.nodeInfoList = [];
+          templateInfo.stripWhiteSpace =
+            (outerTemplateInfo && outerTemplateInfo.stripWhiteSpace) ||
+            template.hasAttribute('strip-whitespace');
+          this._parseTemplateContent(template, templateInfo, {parent: null});
+        }
+        return template._templateInfo;
+      }
+
+      static _parseTemplateContent(template, templateInfo, nodeInfo) {
+        return this._parseTemplateNode(template.content, templateInfo, nodeInfo);
+      }
+
+      /**
+       * Parses template node and adds template and node metadata based on
+       * the current node, and its `childNodes` and `attributes`.
+       *
+       * This method may be overridden to add custom node or template specific
+       * metadata based on this node.
+       *
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template.
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       */
+      static _parseTemplateNode(node, templateInfo, nodeInfo) {
+        let noted;
+        if (node.localName == 'template' && !node.hasAttribute('preserve-content')) {
+          noted = this._parseTemplateNestedTemplate(node, templateInfo, nodeInfo) || noted;
+        } else if (node.localName === 'slot') {
+          // For ShadyDom optimization, indicating there is an insertion point
+          templateInfo.hasInsertionPoint = true;
+        }
+        if (node.firstChild) {
+          noted = this._parseTemplateChildNodes(node, templateInfo, nodeInfo) || noted;
+        }
+        if (node.hasAttributes && node.hasAttributes()) {
+          noted = this._parseTemplateNodeAttributes(node, templateInfo, nodeInfo) || noted;
+        }
+        return noted;
+      }
+
+      /**
+       * Parses template child nodes for the given root node.
+       *
+       * This method also wraps whitelisted legacy template extensions
+       * (`is="dom-if"` and `is="dom-repeat"`) with their equivalent element
+       * wrappers, collapses text nodes, and strips whitespace from the template
+       * if the `templateInfo.stripWhitespace` setting was provided.
+       *
+       * @param {Node} root Root node whose `childNodes` will be parsed
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template.
+       */
+      static _parseTemplateChildNodes(root, templateInfo, nodeInfo) {
+        for (let node=root.firstChild, parentIndex=0, next; node; node=next) {
+          // Wrap templates
+          if (node.localName == 'template') {
+            node = wrapTemplateExtension(node);
+          }
+          // collapse adjacent textNodes: fixes an IE issue that can cause
+          // text nodes to be inexplicably split =(
+          // note that root.normalize() should work but does not so we do this
+          // manually.
+          next = node.nextSibling;
+          if (node.nodeType === Node.TEXT_NODE) {
+            let n = next;
+            while (n && (n.nodeType === Node.TEXT_NODE)) {
+              node.textContent += n.textContent;
+              next = n.nextSibling;
+              root.removeChild(n);
+              n = next;
+            }
+            // optionally strip whitespace
+            if (templateInfo.stripWhiteSpace && !node.textContent.trim()) {
+              root.removeChild(node);
+              continue;
+            }
+          }
+          let childInfo = { parentIndex, parentInfo: nodeInfo };
+          if (this._parseTemplateNode(node, templateInfo, childInfo)) {
+            childInfo.infoIndex = templateInfo.nodeInfoList.push(childInfo) - 1;
+          }
+          parentIndex++;
+        }
+      }
+
+      /**
+       * Parses template content for the given nested `<template>`.
+       *
+       * Nested template info is stored as `templateInfo` in the current node's
+       * `nodeInfo`. `template.content` is removed and stored in `templateInfo`.
+       * It will then be the responsibility of the host to set it back to the
+       * template and for users stamping nested templates to use the
+       * `_contentForTemplate` method to retrieve the content for this template
+       * (an optimization to avoid the cost of cloning nested template content).
+       *
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template.
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       */
+      static _parseTemplateNestedTemplate(node, outerTemplateInfo, nodeInfo) {
+        let templateInfo = this._parseTemplate(node, outerTemplateInfo);
+        let content = templateInfo.content =
+          node.content.ownerDocument.createDocumentFragment();
+        content.appendChild(node.content);
+        nodeInfo.templateInfo = templateInfo;
+        return true;
+      }
+
+      /**
+       * Parses template node attributes and adds node metadata to `nodeInfo`
+       * for nodes of interest.
+       *
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template.
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       */
+      static _parseTemplateNodeAttributes(node, templateInfo, nodeInfo) {
+        // Make copy of original attribute list, since the order may change
+        // as attributes are added and removed
+        let noted;
+        let attrs = Array.from(node.attributes);
+        for (let i=attrs.length-1, a; (a=attrs[i]); i--) {
+          noted = this._parseTemplateNodeAttribute(node, templateInfo, nodeInfo, a.name, a.value) || noted;
+        }
+        return noted;
+      }
+
+      /**
+       * Parses a single template node attribute and adds node metadata to
+       * `nodeInfo` for attributes of interest.
+       *
+       * This implementation adds metadata for `on-event="handler"` attributes
+       * and `id` attributes.
+       *
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template.
+       * @param {string} name Attribute name
+       * @param {string} name Attribute value
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       */
+      static _parseTemplateNodeAttribute(node, templateInfo, nodeInfo, name, value) {
+        // events (on-*)
+        if (name.slice(0, 3) === 'on-') {
+          node.removeAttribute(name);
+          nodeInfo.events = nodeInfo.events || [];
+          nodeInfo.events.push({
+            name: name.slice(3),
+            value
+          });
+          return true;
+        }
+        // static id
+        else if (name === 'id') {
+          nodeInfo.id = value;
+          return true;
+        }
+      }
+
+      /**
+       * Returns the `content` document fragment for a given template.
+       *
+       * For nested templates, Polymer performs an optimization to cache nested
+       * template content to avoid the cost of cloning deeply nested templates.
+       * This method retrieves the cached content for a given template.
+       *
+       * @param {HTMLTemplateElement} template Template to retrieve `content` for
+       * @return {DocumentFragment} Content fragment
+       */
+      static _contentForTemplate(template) {
+        let templateInfo = template.__templateInfo;
+        return (templateInfo && templateInfo.content) || template.content;
       }
 
       /**
@@ -2011,27 +2003,22 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * containing the cloned dom.
        *
        * The template is parsed (once and memoized) using this library's
-       * template parsing features, which identify nodes with declarative
-       * event listeners (`on-...``), `id`'s, `<template>`s, and bindings
-       * (`{{...}}` and `[[...]]`).  This template metadata ("notes")
-       * are stored as `this.__templateNotes`, and any nodes identified in
-       * notes are collected for this instance into `__templateNodes` in
-       * the same order as the notes array.
-       *
-       * Finally, this method generates an "id map" for all nodes with id's
-       * under `this.$`, passes template content back to templates as `_content`
-       * (a performance optimization to avoid deep template cloning), and
-       * installs declarative event listeners.
+       * template parsing features, and provides the following value-added
+       * features:
+       * * Adds declarative event listeners for `on-event="handler"` attributes
+       * * Generates an "id map" for all nodes with id's under `$` on returned
+       *   document fragment
+       * * Passes template info including `content` back to templates as
+       *   `_templateInfo` (a performance optimization to avoid deep template
+       *   cloning)
        *
        * Note that the memoized template parsing process is destructive to the
        * template: attributes for bindings and declarative event listeners are
        * removed after being noted in notes, and any nested <template>.content
        * is removed and stored in notes as well.
        *
-       * Note that this method may only be called once per instance (it does
-       * not support stamping multiple templates per element instance).
-       *
        * @param {HTMLTemplateElement} template Template to stamp
+       * @return {DocumentFragment} Cloned template content
        */
       _stampTemplate(template) {
         // Polyfill support: bootstrap the template if it has not already been
@@ -2039,32 +2026,34 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
             window.HTMLTemplateElement && HTMLTemplateElement.decorate) {
           HTMLTemplateElement.decorate(template);
         }
-        let notes = this.__templateNotes = this._parseTemplateAnnotations(template);
-        let dom = document.importNode(template._content || template.content, true);
+        let templateInfo = this.constructor._parseTemplate(template);
+        let nodeInfo = templateInfo.nodeInfoList;
+        let content = templateInfo.content || template.content;
+        let dom = document.importNode(content, true);
         // NOTE: ShadyDom optimization indicating there is an insertion point
-        dom.__noInsertionPoint = !notes._hasInsertionPoint;
-        this.$ = {};
-        this.__templateNodes = new Array(notes.length);
-        for (let i=0, l=notes.length, note, node; (i<l) && (note=notes[i]); i++) {
-          node = this.__templateNodes[i] = findTemplateAnnotatedNode(dom, note);
-          applyIdToMap(this, this.$, node, note);
-          applyTemplateContent(this, node, note);
-          applyEventListener(this, node, note, this);
+        dom.__noInsertionPoint = !templateInfo.hasInsertionPoint;
+        let nodes = dom.nodeList = new Array(nodeInfo.length);
+        dom.$ = {};
+        for (let i=0, l=nodeInfo.length, info; (i<l) && (info=nodeInfo[i]); i++) {
+          let node = nodes[i] = findTemplateNode(dom, info);
+          applyIdToMap(this, dom.$, node, info);
+          applyTemplateContent(this, node, info);
+          applyEventListener(this, node, info);
         }
         return dom;
       }
 
-      // preprocess-time
-
-      // construct and return a list of annotation records
-      // by scanning `template`'s content
-      //
-      // TODO(sorvell): This should just crawl over a template and call
-      // a supplied list of callbacks.
-      _parseTemplateAnnotations(template) {
-        return parseTemplateAnnotations(template);
-      }
-
+      /**
+       * Adds an event listener by method name for the event provided.
+       *
+       * This method generates a handler function that looks up the method
+       * name at handling time.
+       *
+       * @param {Node} node Node to add listener on
+       * @param {string} eventName Name of event
+       * @param {string} methodName Name of method
+       * @return {Function} Generated handler function
+       */
       _addMethodEventListenerToNode(node, eventName, methodName, context) {
         context = context || node;
         let handler = createNodeEventHandler(context, eventName, methodName);
@@ -2072,10 +2061,24 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         return handler;
       }
 
+      /**
+       * Override point for adding custom or simulated event handling.
+       *
+       * @param {Node} node Node to add event listener to
+       * @param {string} eventName Name of event
+       * @param {Function} handler Listener function to add
+       */
       _addEventListenerToNode(node, eventName, handler) {
         node.addEventListener(eventName, handler);
       }
 
+      /**
+       * Override point for adding custom or simulated event handling.
+       *
+       * @param {Node} node Node to remove event listener from
+       * @param {string} eventName Name of event
+       * @param {Function} handler Listener function to remove
+       */
       _removeEventListenerFromNode(node, eventName, handler) {
         node.removeEventListener(eventName, handler);
       }
@@ -2099,7 +2102,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
   // Property effect types; effects are stored on the prototype using these keys
   const TYPES = {
-    ANY: '__propertyEffects',
     COMPUTE: '__computeEffects',
     REFLECT: '__reflectEffects',
     NOTIFY: '__notifyEffects',
@@ -2157,14 +2159,16 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @param {string} type Type of effect to run
    * @param {Object} props Bag of current property changes
    * @param {Object=} oldProps Bag of previous values for changed properties
+   * @param {boolean=} hasPaths True with `props` contains one or more paths
+   * @param {*=} extraArgs Additional metadata to pass to effect function
    * @private
    */
-  function runEffects(inst, effects, props, oldProps, hasPaths) {
+  function runEffects(inst, effects, props, oldProps, hasPaths, extraArgs) {
     if (effects) {
       let ran;
       let id = dedupeId++;
       for (let prop in props) {
-        if (runEffectsForProperty(inst, effects, id, prop, props, oldProps, hasPaths)) {
+        if (runEffectsForProperty(inst, effects, id, prop, props, oldProps, hasPaths, extraArgs)) {
           ran = true;
         }
       }
@@ -2177,13 +2181,15 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    *
    * @param {Object} inst The instance with effects to run
    * @param {Array} effects Array of effects
-   * @param {number} id Effect run id used for de-duping effects
+   * @param {number} dedupeId Counter used for de-duping effects
    * @param {string} prop Name of changed property
-   * @param {*} value Value of changed property
-   * @param {*} old Previous value of changed property
+   * @param {*} props Changed properties
+   * @param {*} oldProps Old properties
+   * @param {boolean=} hasPaths True with `props` contains one or more paths
+   * @param {*=} extraArgs Additional metadata to pass to effect function
    * @private
    */
-  function runEffectsForProperty(inst, effects, dedupeId, prop, props, oldProps, hasPaths) {
+  function runEffectsForProperty(inst, effects, dedupeId, prop, props, oldProps, hasPaths, extraArgs) {
     let ran;
     let rootProperty = hasPaths ? Polymer.Path.root(prop) : prop;
     let fxs = effects[rootProperty];
@@ -2191,10 +2197,10 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       for (let i=0, l=fxs.length, fx; (i<l) && (fx=fxs[i]); i++) {
         if ((!fx.info || fx.info.lastRun !== dedupeId) &&
             (!hasPaths || pathMatchesTrigger(prop, fx.trigger))) {
-          fx.fn(inst, prop, props, oldProps, fx.info, hasPaths);
           if (fx.info) {
             fx.info.lastRun = dedupeId;
           }
+          fx.fn(inst, prop, props, oldProps, fx.info, hasPaths, extraArgs);
           ran = true;
         }
       }
@@ -2267,6 +2273,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @param {Element} inst The instance with effects to run
    * @param {Object} props Bag of current property changes
    * @param {Object} oldProps Bag of previous values for changed properties
+   * @param {boolean} hasPaths True with `props` contains one or more paths
    * @private
    */
   function runNotifyEffects(inst, notifyProps, props, oldProps, hasPaths) {
@@ -2342,6 +2349,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @param {*} value Current value of property
    * @param {*} old Previous value of property
    * @param {Object} info Effect metadata
+   * @param {boolean} hasPaths True with `props` contains one or more paths
    * @private
    */
   function runNotifyEffect(inst, property, props, oldProps, info, hasPaths) {
@@ -2355,20 +2363,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   }
 
   /**
-   * Adds a 2-way binding notification event listener to the node specified
-   *
-   * @param {Object} node Child element to add listener to
-   * @param {Object} inst Host element instance to handle notification event
-   * @param {Object} info Listener metadata stored via addAnnotatedListener
-   * @private
-   */
-  function addNotifyListener(node, inst, info) {
-    node.addEventListener(info.event, function(e) {
-      handleNotification(e, inst, info.property, info.path, info.negate);
-    });
-  }
-
-  /**
    * Handler function for 2-way notification events. Receives context
    * information captured in the `addNotifyListener` closure from the
    * `__notifyListeners` metadata.
@@ -2379,40 +2373,27 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    *
    * @param {Event} e Notification event (e.g. '<property>-changed')
    * @param {Object} inst Host element instance handling the notification event
-   * @param {string} property Child element property that was bound
-   * @param {string} path Host property/path that was bound
+   * @param {string} fromProp Child element property that was bound
+   * @param {string} toPath Host property/path that was bound
    * @param {boolean} negate Whether the binding was negated
    * @private
    */
-  function handleNotification(e, inst, property, path, negate) {
+  function handleNotification(event, inst, fromProp, toPath, negate) {
     let value;
-    let targetPath = e.detail && e.detail.path;
-    if (targetPath) {
-      path = Polymer.Path.translate(property, path, targetPath);
-      value = e.detail && e.detail.value;
+    let detail = event.detail;
+    let fromPath = detail && detail.path;
+    if (fromPath) {
+      toPath = Polymer.Path.translate(fromProp, toPath, fromPath);
+      value = detail && detail.value;
     } else {
-      value = e.target[property];
+      value = event.target[fromProp];
     }
     value = negate ? !value : value;
-    setPropertyFromNotification(inst, path, value, e);
-  }
-
-  /**
-   * Called by 2-way binding notification event listeners to set a property
-   * or path to the host based on a notification from a bound child.
-   *
-   * @param {string} path Path on this instance to set
-   * @param {*} value Value to set to given path
-   * @protected
-   */
-  function setPropertyFromNotification(inst, path, value, event) {
-    let detail = event.detail;
-    if (detail && detail.queueProperty) {
-      if (!inst.__readOnly || !inst.__readOnly[path]) {
-        inst._setPendingPropertyOrPath(path, value, true, Boolean(detail.path));
+    if (!inst.__readOnly || !inst.__readOnly[toPath]) {
+      if (inst._setPendingPropertyOrPath(toPath, value, true, Boolean(fromPath))
+        && (!detail || !detail.queueProperty)) {
+        inst._invalidateProperties();
       }
-    } else {
-      inst.set(path, value);
     }
   }
 
@@ -2449,6 +2430,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @param {Element} inst The instance the effect will be run on
    * @param {Object} changedProps Bag of changed properties
    * @param {Object} oldProps Bag of previous values for changed properties
+   * @param {boolean} hasPaths True with `props` contains one or more paths
    * @private
    */
   function runComputedEffects(inst, changedProps, oldProps, hasPaths) {
@@ -2479,7 +2461,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   function runComputedEffect(inst, property, props, oldProps, info) {
     let result = runMethodEffect(inst, property, props, oldProps, info);
     let computedProp = info.methodInfo;
-    if (inst.__propertyEffects && inst.__propertyEffects[computedProp]) {
+    if (inst.__dataHasAccessor && inst.__dataHasAccessor[computedProp]) {
       inst._setPendingProperty(computedProp, result, true);
     } else {
       inst[computedProp] = result;
@@ -2492,6 +2474,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    *
    * @param {Element} inst The instance whose props are changing
    * @param {Object} changedProps Bag of changed properties
+   * @param {boolean} hasPaths True with `props` contains one or more paths
    * @private
    */
   function computeLinkedPaths(inst, changedProps, hasPaths) {
@@ -2521,44 +2504,69 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   // -- bindings ----------------------------------------------
 
   /**
-   * Adds "binding" property effects for the template annotation
-   * ("note" for short) and node index specified.  These may either be normal
-   * "binding" effects (property/path bindings) or "method binding"
-   * effects, aka inline computing functions, depending on the type of binding
-   * detailed in the note.
+   * Adds binding metadata to the current `nodeInfo`, and binding effects
+   * for all part dependencies to `templateInfo`.
    *
-   * @param {Object} model Prototype or instance
-   * @param {Object} note Annotation note returned from Annotator
-   * @param {number} index Index into `__templateNodes` list of annotated nodes that the
-   *   note applies to
-   * @param {Object=} dynamicFns Map indicating whether method names should
-   *   be included as a dependency to the effect.
+   * @param {Function} constructor Class that `_parseTemplate` is currently
+   *   running on
+   * @param {Object} templateInfo Template metadata for current template
+   * @param {Object} nodeInfo Node metadata for current template node
+   * @param {string} kind Binding kind, either 'property', 'attribute', or 'text'
+   * @param {string} target Target property name
+   * @param {Array<Object>} parts Array of binding part metadata
+   * @param {string} literal Literal text surrounding binding parts (specified
+   *   only for 'property' bindings, since these must be initialized as part
+   *   of boot-up)
    * @private
    */
-  function addBindingEffect(model, note, index, dynamicFns) {
-    for (let i=0; i<note.parts.length; i++) {
-      let part = note.parts[i];
-      if (part.signature) {
-        addMethodBindingEffect(model, note, part, index, dynamicFns);
-      } else if (!part.literal) {
-        if (note.kind === 'attribute' && note.name[0] === '-') {
-          console.warn('Cannot set attribute ' + note.name +
-            ' because "-" is not a valid attribute starting character');
-        } else {
-          model._addPropertyEffect(Polymer.Path.root(part.value), TYPES.PROPAGATE, {
+  function addBinding(constructor, templateInfo, nodeInfo, kind, target, parts, literal) {
+    // Create binding metadata and add to nodeInfo
+    nodeInfo.bindings = nodeInfo.bindings || [];
+    let binding = { kind, target, parts, literal, isCompound: (parts.length !== 1) };
+    nodeInfo.bindings.push(binding);
+    // Add listener info to binding metadata
+    if (shouldAddListener(binding)) {
+      let {event, negate} = binding.parts[0];
+      binding.listenerEvent = event || (CaseMap.camelToDashCase(target) + '-changed');
+      binding.listenerNegate = negate;
+    }
+    // Add "propagate" property effects to templateInfo
+    let index = templateInfo.nodeInfoList.length;
+    for (let i=0; i<binding.parts.length; i++) {
+      let part = binding.parts[i];
+      part.compoundIndex = i;
+      addEffectForBindingPart(constructor, templateInfo, binding, part, index);
+    }
+  }
+
+  /**
+   * Adds property effects to the given `templateInfo` for the given binding
+   * part.
+   *
+   * @param {Function} constructor Class that `_parseTemplate` is currently
+   *   running on
+   * @param {Object} templateInfo Template metadata for current template
+   * @param {Object} binding Binding metadata
+   * @param {Object} part Binding part metadata
+   * @param {Number} index Index into `nodeInfoList` for this node
+   */
+  function addEffectForBindingPart(constructor, templateInfo, binding, part, index) {
+    if (!part.literal) {
+      if (binding.kind === 'attribute' && binding.target[0] === '-') {
+        console.warn('Cannot set attribute ' + binding.target +
+          ' because "-" is not a valid attribute starting character');
+      } else {
+        let dependencies = part.dependencies;
+        let info = { index, binding, part, evaluator: constructor };
+        for (let j=0; j<dependencies.length; j++) {
+          let trigger = dependencies[j];
+          if (typeof trigger == 'string') {
+            trigger = parseArg(trigger);
+            trigger.wildcard = true;
+          }
+          constructor._addTemplatePropertyEffect(templateInfo, trigger.rootProperty, {
             fn: runBindingEffect,
-            info:  {
-              kind: note.kind,
-              index: index,
-              name: note.name,
-              propertyName: note.propertyName,
-              value: part.value,
-              isCompound: note.isCompound,
-              compoundIndex: part.compoundIndex,
-              event: part.event,
-              customEvent: part.customEvent,
-              negate: part.negate
-            }
+            info, trigger
           });
         }
       }
@@ -2568,41 +2576,40 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   /**
    * Implements the "binding" (property/path binding) effect.
    *
+   * Note that binding syntax is overridable via `_parseBindings` and
+   * `_evaluateBindings`.  This method will call `_evaluateBinding` for any
+   * non-literal parts returned from `_parseBindings`.  However,
+   * there is no support for _path_ bindings via custom binding parts,
+   * as this is specific to Polymer's path binding syntax.
+   *
    * @param {Element} inst The instance the effect will be run on
    * @param {string} path Name of property
    * @param {*} value Current value of property
    * @param {*} old Previous value of property
    * @param {Object} info Effect metadata
+   * @param {boolean} hasPaths True with `props` contains one or more paths
+   * @param {Array} nodes List of nodes associated with `nodeInfoList` template
+   *   metadata
    * @private
    */
-  function runBindingEffect(inst, path, props, oldProps, info, hasPaths) {
-    let value;
-    let node = inst.__templateNodes[info.index];
+  function runBindingEffect(inst, path, props, oldProps, info, hasPaths, nodeList) {
+    let node = nodeList[info.index];
+    let binding = info.binding;
+    let part = info.part;
     // Subpath notification: transform path and set to client
     // e.g.: foo="{{obj.sub}}", path: 'obj.sub.prop', set 'foo.prop'=obj.sub.prop
-    if (hasPaths && (path.length > info.value.length) &&
-        (info.kind == 'property') && !info.isCompound &&
-        node.__propertyEffects && node.__propertyEffects[info.name]) {
+    if (hasPaths && part.source && (path.length > part.source.length) &&
+        (binding.kind == 'property') && !binding.isCompound &&
+        node.__dataHasAccessor && node.__dataHasAccessor[binding.target]) {
       let value = props[path];
-      path = Polymer.Path.translate(info.value, info.name, path);
+      path = Polymer.Path.translate(part.source, binding.target, path);
       if (node._setPendingPropertyOrPath(path, value, false, true)) {
         inst._enqueueClient(node);
       }
     } else {
-      // Root or deeper path was set; extract bound path value
-      // e.g.: foo="{{obj.sub}}", path: 'obj', set 'foo'=obj.sub
-      //   or: foo="{{obj.sub}}", path: 'obj.sub.prop', set 'foo'=obj.sub
-      if (path != info.value) {
-        value = Polymer.Path.get(inst, info.value);
-      } else {
-        if (hasPaths && Polymer.Path.isPath(path)) {
-          value = Polymer.Path.get(inst, path);
-        } else {
-          value = inst.__data[path];
-        }
-      }
+      let value = info.evaluator._evaluateBinding(inst, part, path, props, oldProps, hasPaths);
       // Propagate value to child
-      applyBindingValue(inst, info, value);
+      applyBindingValue(inst, node, binding, part, value);
     }
   }
 
@@ -2615,19 +2622,18 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @param {*} value Value to set
    * @private
    */
-  function applyBindingValue(inst, info, value) {
-    let node = inst.__templateNodes[info.index];
-    value = computeBindingValue(node, value, info);
+  function applyBindingValue(inst, node, binding, part, value) {
+    value = computeBindingValue(node, value, binding, part);
     if (Polymer.sanitizeDOMValue) {
-      value = Polymer.sanitizeDOMValue(value, info.name, info.kind, node);
+      value = Polymer.sanitizeDOMValue(value, binding.target, binding.kind, node);
     }
-    if (info.kind == 'attribute') {
+    if (binding.kind == 'attribute') {
       // Attribute binding
-      inst._valueToNodeAttribute(node, value, info.name);
+      inst._valueToNodeAttribute(node, value, binding.target);
     } else {
       // Property binding
-      let prop = info.name;
-      if (node.__propertyEffects && node.__propertyEffects[prop]) {
+      let prop = binding.target;
+      if (node.__dataHasAccessor && node.__dataHasAccessor[prop]) {
         if (!node.__readOnly || !node.__readOnly[prop]) {
           if (node._setPendingProperty(prop, value)) {
             inst._enqueueClient(node);
@@ -2645,172 +2651,24 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    *
    * @param {Node} node Node the value will be set to
    * @param {*} value Value to set
-   * @param {Object} info Effect metadata
+   * @param {Object} binding Binding metadata
    * @return {*} Transformed value to set
    * @private
    */
-  function computeBindingValue(node, value, info) {
-    if (info.negate) {
-      value = !value;
-    }
-    if (info.isCompound) {
-      let storage = node.__dataCompoundStorage[info.name];
-      storage[info.compoundIndex] = value;
+  function computeBindingValue(node, value, binding, part) {
+    if (binding.isCompound) {
+      let storage = node.__dataCompoundStorage[binding.target];
+      storage[part.compoundIndex] = value;
       value = storage.join('');
     }
-    if (info.kind !== 'attribute') {
+    if (binding.kind !== 'attribute') {
       // Some browsers serialize `undefined` to `"undefined"`
-      if (info.name === 'textContent' ||
-          (node.localName == 'input' && info.name == 'value')) {
+      if (binding.target === 'textContent' ||
+          (node.localName == 'input' && binding.target == 'value')) {
         value = value == undefined ? '' : value;
       }
     }
     return value;
-  }
-
-  /**
-   * Adds "binding method" property effects for the template binding
-   * ("note" for short), part metadata, and node index specified.
-   *
-   * @param {Object} model Prototype or instance
-   * @param {Object} note Binding note returned from Annotator
-   * @param {Object} part The compound part metadata
-   * @param {number} index Index into `__templateNodes` list of annotated nodes that the
-   *   note applies to
-   * @param {Object=} dynamicFns Map indicating whether method names should
-   *   be included as a dependency to the effect.
-   * @private
-   */
-  function addMethodBindingEffect(model, note, part, index, dynamicFns) {
-    createMethodEffect(model, part.signature, TYPES.PROPAGATE,
-      runMethodBindingEffect, {
-        index: index,
-        isCompound: note.isCompound,
-        compoundIndex: part.compoundIndex,
-        kind: note.kind,
-        name: note.name,
-        negate: part.negate,
-        part: part
-      }, dynamicFns
-    );
-  }
-
-  /**
-   * Implements the "binding method" (inline computed function) effect.
-   *
-   * Runs the method with the values of the arguments specified in the `info`
-   * object and setting the return value to the node property/attribute.
-   *
-   * @param {Object} inst The instance the effect will be run on
-   * @param {string} property Name of property
-   * @param {*} value Current value of property
-   * @param {*} old Previous value of property
-   * @param {Object} info Effect metadata
-   * @private
-   */
-  function runMethodBindingEffect(inst, property, props, oldProps, info) {
-    let val = runMethodEffect(inst, property, props, oldProps, info);
-    applyBindingValue(inst, info.methodInfo, val);
-  }
-
-  /**
-   * Post-processes template bindings (notes for short) provided by the
-   * Bindings library for use by the effects system:
-   * - Parses bindings for methods into method `signature` objects
-   * - Memoizes the root property for path bindings
-   * - Recurses into nested templates and processes those templates and
-   *   extracts any host properties, which are set to the template's
-   *   `_content._hostProps`
-   * - Adds bindings from the host to <template> elements for any nested
-   *   template's lexically bound "host properties"; template handling
-   *   elements can then add accessors to the template for these properties
-   *   to forward host properties into template instances accordingly.
-   *
-   * @param {Array<Object>} notes List of notes to process; the notes are
-   *   modified in place.
-   * @private
-   */
-  function processAnnotations(notes) {
-    if (!notes._processed) {
-      for (let i=0; i<notes.length; i++) {
-        let note = notes[i];
-        // Parse bindings for methods & path roots (models)
-        for (let j=0; j<note.bindings.length; j++) {
-          let b = note.bindings[j];
-          for (let k=0; k<b.parts.length; k++) {
-            let p = b.parts[k];
-            if (!p.literal) {
-              p.signature = parseMethod(p.value);
-              if (!p.signature) {
-                p.rootProperty = Polymer.Path.root(p.value);
-              }
-            }
-          }
-        }
-        // Recurse into nested templates & bind host props
-        if (note.templateContent) {
-          processAnnotations(note.templateContent._notes);
-          let hostProps = note.templateContent._hostProps =
-            discoverTemplateHostProps(note.templateContent._notes);
-          let bindings = [];
-          for (let prop in hostProps) {
-            bindings.push({
-              index: note.index,
-              kind: 'property',
-              name: '_host_' + prop,
-              parts: [{
-                mode: '{',
-                value: prop
-              }]
-            });
-          }
-          note.bindings = note.bindings.concat(bindings);
-        }
-      }
-      notes._processed = true;
-    }
-  }
-
-  /**
-   * Finds all property usage in templates (property/path bindings and function
-   * arguments) and returns the path roots as keys in a map. Each outer template
-   * merges inner _hostProps to propagate inner host property needs to outer
-   * templates.
-   *
-   * @param {Array<Object>} notes List of notes to process for a given template
-   * @return {Object<string,boolean>} Map of host properties that the template
-   *   (or any nested templates) uses
-   * @private
-   */
-  function discoverTemplateHostProps(notes) {
-    let hostProps = {};
-    for (let i=0, n; (i<notes.length) && (n=notes[i]); i++) {
-      // Find all bindings to parent.* and spread them into _parentPropChain
-      for (let j=0, b$=n.bindings, b; (j<b$.length) && (b=b$[j]); j++) {
-        for (let k=0, p$=b.parts, p; (k<p$.length) && (p=p$[k]); k++) {
-          if (p.signature) {
-            let args = p.signature.args;
-            for (let kk=0; kk<args.length; kk++) {
-              let rootProperty = args[kk].rootProperty;
-              if (rootProperty) {
-                hostProps[rootProperty] = true;
-              }
-            }
-            hostProps[p.signature.methodName] = true;
-          } else {
-            if (p.rootProperty) {
-              hostProps[p.rootProperty] = true;
-            }
-          }
-        }
-      }
-      // Merge child _hostProps into this _hostProps
-      if (n.templateContent) {
-        let templateHostProps = n.templateContent._hostProps;
-        Object.assign(hostProps, templateHostProps);
-      }
-    }
-    return hostProps;
   }
 
   /**
@@ -2827,7 +2685,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * @private
    */
   function shouldAddListener(binding) {
-    return binding.name &&
+    return binding.target &&
            binding.kind != 'attribute' &&
            binding.kind != 'text' &&
            !binding.isCompound &&
@@ -2835,71 +2693,80 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   }
 
   /**
-   * Sets up a prototypical `__notifyListeners` metadata array to be used at
-   * instance time to add event listeners for 2-way bindings.
-   *
-   * @param {Object} model Prototype (instances not currently supported)
-   * @param {number} index Index into `__templateNodes` list of annotated nodes that the
-   *   event should be added to
-   * @param {string} property Property of target node to listen for changes
-   * @param {string} path Host path that the change should be propagated to
-   * @param {string=} event A custom event name to listen for (e.g. via the
-   *   `{{prop::eventName}}` syntax)
-   * @param {boolean=} negate Whether the notified value should be negated before
-   *   setting to host path
-   * @private
-   */
-  function addAnnotatedListener(model, index, property, path, event, negate) {
-    let eventName = event ||
-      (CaseMap.camelToDashCase(property) + '-changed');
-    model.__notifyListeners = model.__notifyListeners || [];
-    model.__notifyListeners.push({
-      index: index,
-      property: property,
-      path: path,
-      event: eventName,
-      negate: negate
-    });
-  }
-
-  /**
-   * Adds all 2-way binding notification listeners to a host based on
-   * `__notifyListeners` metadata recorded by prior calls to`addAnnotatedListener`
-   *
-   * @param {Object} inst Host element instance
-   * @private
-   */
-  function setupNotifyListeners(inst) {
-    let b$ = inst.__notifyListeners;
-    for (let i=0, l=b$.length, info; (i<l) && (info=b$[i]); i++) {
-      let node = inst.__templateNodes[info.index];
-      addNotifyListener(node, inst, info);
-    }
-  }
-
-  /**
-   * On the `inst` element that was previously bound, uses `inst.__templateNotes`
-   * to setup compound binding storage structures onto the bound
-   * nodes (`inst.__templateNodes`).
-   * (`inst._, and 2-way binding event listeners are also added.)
+   * Setup compound binding storage structures, notify listeners, and dataHost
+   * references onto the bound nodeList.
    *
    * @param {Object} inst Instance that bas been previously bound
+   * @param {Object} templateInfo Template metadata
    * @private
    */
-  function setupBindings(inst) {
-    let notes = inst.__templateNotes;
-    if (notes.length) {
-      for (let i=0; i < notes.length; i++) {
-        let note = notes[i];
-        let node = inst.__templateNodes[i];
-        node.__dataHost = inst;
-        if (note.bindings) {
-          setupCompoundBinding(note, node);
+  function setupBindings(inst, templateInfo) {
+    // Setup compound storage, dataHost, and notify listeners
+    let {nodeList, nodeInfoList} = templateInfo;
+    if (nodeInfoList.length) {
+      for (let i=0; i < nodeInfoList.length; i++) {
+        let info = nodeInfoList[i];
+        let node = nodeList[i];
+        let bindings = info.bindings;
+        if (bindings) {
+          for (let i=0; i<bindings.length; i++) {
+            let binding = bindings[i];
+            setupCompoundStorage(node, binding);
+            addNotifyListener(node, inst, binding);
+          }
         }
+        node.__dataHost = inst;
       }
     }
-    if (inst.__notifyListeners) {
-      setupNotifyListeners(inst);
+  }
+
+  /**
+   * Initializes `__dataCompoundStorage` local storage on a bound node with
+   * initial literal data for compound bindings, and sets the joined
+   * literal parts to the bound property.
+   *
+   * When changes to compound parts occur, they are first set into the compound
+   * storage array for that property, and then the array is joined to result in
+   * the final value set to the property/attribute.
+   *
+   * @param {Node} node Bound node to initialize
+   * @param {Object} bindings Binding metadata
+   * @private
+   */
+  function setupCompoundStorage(node, binding) {
+    if (binding.isCompound) {
+      // Create compound storage map
+      let storage = node.__dataCompoundStorage ||
+        (node.__dataCompoundStorage = {});
+      let parts = binding.parts;
+      // Copy literals from parts into storage for this binding
+      let literals = new Array(parts.length);
+      for (let j=0; j<parts.length; j++) {
+        literals[j] = parts[j].literal;
+      }
+      let target = binding.target;
+      storage[target] = literals;
+      // Configure properties with their literal parts
+      if (binding.literal && binding.kind == 'property') {
+        node[target] = binding.literal;
+      }
+    }
+  }
+
+  /**
+   * Adds a 2-way binding notification event listener to the node specified
+   *
+   * @param {Object} node Child element to add listener to
+   * @param {Object} inst Host element instance to handle notification event
+   * @param {Object} info Listener metadata stored via addAnnotatedListener
+   * @private
+   */
+  function addNotifyListener(node, inst, binding) {
+    if (binding.listenerEvent) {
+      let part = binding.parts[0];
+      node.addEventListener(binding.listenerEvent, function(e) {
+        handleNotification(e, inst, binding.target, part.source, part.negate);
+      });
     }
   }
 
@@ -2972,6 +2839,33 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
   const emptyArray = [];
 
+  // Regular expressions used for binding
+  const IDENT  = '(?:' + '[a-zA-Z_$][\\w.:$\\-*]*' + ')';
+  const NUMBER = '(?:' + '[-+]?[0-9]*\\.?[0-9]+(?:[eE][-+]?[0-9]+)?' + ')';
+  const SQUOTE_STRING = '(?:' + '\'(?:[^\'\\\\]|\\\\.)*\'' + ')';
+  const DQUOTE_STRING = '(?:' + '"(?:[^"\\\\]|\\\\.)*"' + ')';
+  const STRING = '(?:' + SQUOTE_STRING + '|' + DQUOTE_STRING + ')';
+  const ARGUMENT = '(?:' + IDENT + '|' + NUMBER + '|' +  STRING + '\\s*' + ')';
+  const ARGUMENTS = '(?:' + ARGUMENT + '(?:,\\s*' + ARGUMENT + ')*' + ')';
+  const ARGUMENT_LIST = '(?:' + '\\(\\s*' +
+                                '(?:' + ARGUMENTS + '?' + ')' +
+                              '\\)\\s*' + ')';
+  const BINDING = '(' + IDENT + '\\s*' + ARGUMENT_LIST + '?' + ')'; // Group 3
+  const OPEN_BRACKET = '(\\[\\[|{{)' + '\\s*';
+  const CLOSE_BRACKET = '(?:]]|}})';
+  const NEGATE = '(?:(!)\\s*)?'; // Group 2
+  const EXPRESSION = OPEN_BRACKET + NEGATE + BINDING + CLOSE_BRACKET;
+  const bindingRegex = new RegExp(EXPRESSION, "g");
+
+  function literalFromParts(parts) {
+    let s = '';
+    for (let i=0; i<parts.length; i++) {
+      let literal = parts[i].literal;
+      s += literal || '';
+    }
+    return s;
+  }
+
   /**
    * Parses an expression string for a method signature, and returns a metadata
    * describing the method in terms of `methodName`, `static` (whether all the
@@ -2986,7 +2880,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     // tries to match valid javascript property names
     let m = expression.match(/([^\s]+?)\(([\s\S]*)\)/);
     if (m) {
-      let sig = { methodName: m[1], static: true };
+      let methodName = m[1];
+      let sig = { methodName, static: true };
       if (m[2].trim()) {
         // replace escaped commas with comma entity, split on un-escaped commas
         let args = m[2].replace(/\\,/g, '&comma;').split(',');
@@ -3073,7 +2968,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     if (!a.literal) {
       a.rootProperty = Polymer.Path.root(arg);
       // detect structured path (has dots)
-      a.structured = Polymer.Path.isDeep(arg);
+      a.structured = Polymer.Path.isPath(arg);
       if (a.structured) {
         a.wildcard = (arg.slice(-2) == '.*');
         if (a.wildcard) {
@@ -3130,43 +3025,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
     }
     return values;
-  }
-
-  /**
-   * Initializes `__dataCompoundStorage` local storage on a bound node with
-   * initial literal data for compound bindings, and sets the joined
-   * literal parts to the bound property.
-   *
-   * When changes to compound parts occur, they are first set into the compound
-   * storage array for that property, and then the array is joined to result in
-   * the final value set to the property/attribute.
-   *
-   * @param {Object} note Annotation metadata
-   * @param {Node} node Bound node to initialize
-   * @private
-   */
-  function setupCompoundBinding(note, node) {
-    let bindings = note.bindings;
-    for (let i=0; i<bindings.length; i++) {
-      let binding = bindings[i];
-      if (binding.isCompound) {
-        // Create compound storage map
-        let storage = node.__dataCompoundStorage ||
-          (node.__dataCompoundStorage = {});
-        let parts = binding.parts;
-        // Copy literals from parts into storage for this binding
-        let literals = new Array(parts.length);
-        for (let j=0; j<parts.length; j++) {
-          literals[j] = parts[j].literal;
-        }
-        let name = binding.name;
-        storage[name] = literals;
-        // Configure properties with their literal parts
-        if (binding.literal && binding.kind == 'property') {
-          node[name] = binding.literal;
-        }
-      }
-    }
   }
 
   // data api
@@ -3226,24 +3084,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   }
 
   /**
-   * Sets the provided properties into pending data on the instance.
-   *
-   * @param {HTMLElement} inst Instance to apply data to
-   * @param {object} props Bag of instance properties to set
-   * @private
-   */
-  function initalizeInstanceProperties(inst, props) {
-    inst.__dataOld = inst.__dataOld || {};
-    inst.__dataPending = inst.__dataPending || {};
-    let readOnly = inst.__readOnly;
-    for (let prop in props) {
-      if (!readOnly || !readOnly[prop]) {
-        inst.__data[prop] = inst.__dataPending[prop] = props[prop];
-      }
-    }
-  }
-
-  /**
    * Element class mixin that provides meta-programming for Polymer's template
    * binding and data observation (collectively, "property effects") system.
    *
@@ -3262,6 +3102,12 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
    * the property effects.  These methods may be called on element instances,
    * but are designed to be called on element prototypes such that the work to
    * set up accessors and effect metadata are done once per element class.
+   *
+   * Note that this mixin overrides several `PropertyAccessors` methods, in
+   * many cases to maintain guarantees provided by the Polymer 1.x features;
+   * notably it changes property accessors to be synchronous by default
+   * whereas the default when using `PropertyAccessors` standalone is to be
+   * async by default.
    *
    * @polymerMixin
    * @mixes Polymer.TemplateStamp
@@ -3292,7 +3138,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        */
       _initializeProperties() {
         super._initializeProperties();
-        this.__dataInitialized = false;
         this.__dataClientsInitialized = false;
         this.__dataPendingClients = null;
         this.__dataToNotify = null;
@@ -3302,16 +3147,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         this.__dataCompoundStorage = this.__dataCompoundStorage || null;
         this.__dataHost = this.__dataHost || null;
         this.__dataTemp = {};
-        // Capture instance properties; these will be set into accessors
-        // during first flush. Don't set them here, since we want
-        // these to overwrite defaults/constructor assignments
-        for (let p in this.__propertyEffects) {
-          if (this.hasOwnProperty(p)) {
-            this.__dataInstanceProps = this.__dataInstanceProps || {};
-            this.__dataInstanceProps[p] = this[p];
-            delete this[p];
-          }
-        }
       }
 
       /**
@@ -3327,6 +3162,23 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         this.__dataOld = {};
       }
 
+      /**
+       * Overrides `Polymer.PropertyAccessors` implementation to avoid setting
+       * `_setProperty`'s `shouldNotify: true`.
+       *
+       * @override
+       */
+      _initializeInstanceProperties(props) {
+        let readOnly = this.__readOnly;
+        for (let prop in props) {
+          if (!readOnly || !readOnly[prop]) {
+            this.__dataPending = this.__dataPending || {};
+            this.__dataOld = this.__dataOld || {};
+            this.__data[prop] = this.__dataPending[prop] = props[prop];
+          }
+        }
+      }
+
       // Prototype setup ----------------------------------------
 
       /**
@@ -3339,12 +3191,25 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        *   {
        *     fn: effectFunction, // Reference to function to call to perform effect
        *     info: { ... }       // Effect metadata passed to function
-       *     // path: '...'      // Will be set by this method based on path arg
+       *     trigger: {          // Optional triggering metadata; if not provided
+       *       name: string      // the property is treated as a wildcard
+       *       structured: boolean
+       *       wildcard: boolean
+       *     }
        *   }
+       *
+       * Effects are called from `_propertiesChanged` in the following order by
+       * type:
+       *
+       * 1. COMPUTE
+       * 2. PROPAGATE
+       * 3. REFLECT
+       * 4. OBSERVE
+       * 5. NOTIFY
        *
        * Effect functions are called with the following signature:
        *
-       *   effectFunction(inst, property, currentValue, oldValue, info)
+       *   effectFunction(inst, path, props, oldProps, info, hasPaths)
        *
        * This method may be called either on the prototype of a class
        * using the PropertyEffects mixin (for best performance), or on
@@ -3353,27 +3218,34 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * its prototype, the property effect lists will be cloned and added as
        * own properties of the caller.
        *
-       * @param {string} path Property (or path) that should trigger the effect
+       * @param {string} property Property that should trigger the effect
        * @param {string} type Effect type, from this.PROPERTY_EFFECT_TYPES
        * @param {Object=} effect Effect metadata object
        * @protected
        */
       _addPropertyEffect(property, type, effect) {
-        let effects = ensureOwnEffectMap(this, TYPES.ANY)[property];
-        if (!effects) {
-          effects = this.__propertyEffects[property] = [];
-          this._createPropertyAccessor(property,
-            type == TYPES.READ_ONLY);
-        }
+        this._createPropertyAccessor(property, type == TYPES.READ_ONLY);
         // effects are accumulated into arrays per property based on type
-        if (effect) {
-          effects.push(effect);
-        }
-        effects = ensureOwnEffectMap(this, type)[property];
+        let effects = ensureOwnEffectMap(this, type)[property];
         if (!effects) {
           effects = this[type][property] = [];
         }
         effects.push(effect);
+      }
+
+      /**
+       * Removes the given property effect.
+       *
+       * @param {string} path Property the effect was associated with
+       * @param {string} type Effect type, from this.PROPERTY_EFFECT_TYPES
+       * @param {Object=} effect Effect metadata object to remove
+       */
+      _removePropertyEffect(property, type, effect) {
+        let effects = ensureOwnEffectMap(this, type)[property];
+        let idx = effects.indexOf(effect);
+        if (idx >= 0) {
+          effects.splice(idx, 1);
+        }
       }
 
       /**
@@ -3386,7 +3258,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @protected
        */
       _hasPropertyEffect(property, type) {
-        let effects = this[type || TYPES.ANY];
+        let effects = this[type];
         return Boolean(effects && effects[property]);
       }
 
@@ -3468,9 +3340,9 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        */
       _setPendingPropertyOrPath(path, value, shouldNotify, isPathNotification) {
         let rootProperty = Polymer.Path.root(Array.isArray(path) ? path[0] : path);
-        let hasEffect = this.__propertyEffects && this.__propertyEffects[rootProperty];
+        let hasAccessor = this.__dataHasAccessor && this.__dataHasAccessor[rootProperty];
         let isPath = (rootProperty !== path);
-        if (hasEffect) {
+        if (hasAccessor) {
           if (isPath) {
             if (!isPathNotification) {
               // Dirty check changes being set to a path against the actual object,
@@ -3680,55 +3552,14 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
 
       /**
-       * Overrides PropertyAccessor's default async queuing of
-       * `_propertiesChanged`, to instead synchronously flush
-       * `_propertiesChanged` unless the `this._asyncEffects` property is true.
-       *
-       * If this is the first time properties are being flushed, the `ready`
-       * callback will be called.
+       * Overrides PropertyAccessor
        *
        * @override
        */
-      _flushProperties() {
-        if (!this.__dataInitialized) {
-          this.ready()
-        } else if (this.__dataPending) {
-          super._flushProperties();
-          if (!this.__dataCounter) {
-            // Clear temporary cache at end of turn
-            this.__dataTemp = {};
-          }
-        }
-      }
-
-      /**
-       * Polymer-specific lifecycle callback called the first time properties
-       * are being flushed.  Prior to `ready`, all property sets through
-       * accessors are queued and their effects are flushed after this method
-       * returns.
-       *
-       * Users may override this function to implement behavior that is
-       * dependent on the element having its properties initialized, e.g.
-       * from defaults (initialized from `constructor`, `_initializeProperties`),
-       * `attributeChangedCallback`, or binding values propagated from host
-       * "binding effects".  `super.ready()` must be called to ensure the
-       * data system becomes enabled.
-       *
-       * @public
-       */
       ready() {
-        // Update instance properties that shadowed proto accessors; these take
-        // priority over any defaults set in `properties` or constructor
-        let instanceProps = this.__dataInstanceProps;
-        if (instanceProps) {
-          initalizeInstanceProperties(this, instanceProps);
-        }
-        // Enable acceessors
-        this.__dataInitialized = true;
-        if (this.__dataPending) {
-          // Run normal flush
-          this._flushProperties();
-        } else {
+        let dataPending = this.__dataPending;
+        super.ready();
+        if (!dataPending) {
           this._readyClients();
         }
       }
@@ -3742,30 +3573,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        */
       _readyClients() {
         this.__dataClientsInitialized = true;
-      }
-
-      /**
-       * Stamps the provided template and performs instance-time setup for
-       * Polymer template features, including data bindings, declarative event
-       * listeners, and the `this.$` map of `id`'s to nodes.  A document fragment
-       * is returned containing the stamped DOM, ready for insertion into the
-       * DOM.
-       *
-       * Note that for host data to be bound into the stamped DOM, the template
-       * must have been previously bound to the prototype via a call to
-       * `_bindTemplate`, which performs one-time template binding work.
-       *
-       * Note that this method currently only supports being called once per
-       * instance.
-       *
-       * @param {HTMLTemplateElement} template Template to stamp
-       * @return {DocumentFragment} Cloned template content
-       * @protected
-       */
-      _stampTemplate(template) {
-        let dom = super._stampTemplate(template);
-        setupBindings(this);
-        return dom;
       }
 
       /**
@@ -3793,7 +3600,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         let notifyProps = this.__dataToNotify;
         this.__dataToNotify = null;
         // Propagate properties to clients
-        runEffects(this, this.__propagateEffects, changedProps, oldProps, hasPaths);
+        this._propagatePropertyChanges(changedProps, oldProps, hasPaths);
         // Flush clients
         this._flushClients();
         // Reflect properties
@@ -3804,9 +3611,34 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         if (notifyProps) {
           runNotifyEffects(this, notifyProps, changedProps, oldProps, hasPaths);
         }
+        // Clear temporary cache at end of turn
+        if (this.__dataCounter == 1) {
+          this.__dataTemp = {};
+        }
         // ----------------------------
         // window.debug && console.groupEnd(this.localName + '#' + this.id + ': ' + c);
         // ----------------------------
+      }
+
+      /**
+       * Called to propagate any property changes to stamped template nodes
+       * managed by this element.
+       *
+       * @param {Object} changedProps Bag of changed properties
+       * @param {Object} oldProps Bag of previous values for changed properties
+       * @param {boolean} hasPaths True with `props` contains one or more paths
+       * @protected
+       */
+      _propagatePropertyChanges(changedProps, oldProps, hasPaths) {
+        if (this.__propagateEffects) {
+          runEffects(this, this.__propagateEffects, changedProps, oldProps, hasPaths);
+        }
+        let templateInfo = this.__templateInfo;
+        while (templateInfo) {
+          runEffects(this, templateInfo.propertyEffects, changedProps, oldProps,
+            hasPaths, templateInfo.nodeList);
+          templateInfo = templateInfo.nextTemplateInfo;
+        }
       }
 
       /**
@@ -4231,35 +4063,378 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       // -- binding ----------------------------------------------
 
       /**
-       * Creates "binding" property effects for all binding bindings
-       * in the provided template that forward host properties into DOM stamped
-       * from the template via `_stampTemplate`.
+       * Parses the provided template to ensure binding effects are created
+       * for them, and then ensures property accessors are created for any
+       * dependent properties in the template.  Binding effects for bound
+       * templates are stored in a linked list on the instance so that
+       * templates can be efficiently stamped and unstamped.
+       *
+       * This method may be called on the prototype (for prototypical template
+       * binding, to avoid creating accessors every instance) once per prototype,
+       * and will be called with `runtimeBinding: true` by `_stampTemplate` to
+       * create and link an instance of the template metadata associated with a
+       * particular stamping.
        *
        * @param {HTMLTemplateElement} template Template containing binding
        *   bindings
-       * @param {Object=} dynamicFns Map indicating whether method names should
-       *   be included as a dependency to the effect.
+       * @param {boolean=} instanceBinding When false (default), performs
+       *   "prototypical" binding of the template and overwrites any previously
+       *   bound template for the class. When true (as passed from
+       *   `_stampTemplate`), the template info is instanced and linked into
+       *   the list of bound templates.
+       * @return {Object} Template metadata object; for `runtimeBinding`,
+       *   this is an instance of the prototypical template info
        * @protected
        */
-      _bindTemplate(template, dynamicFns) {
-        // Clear any existing propagation effects inherited from superClass
-        this.__propagateEffects = {};
-        this.__notifyListeners = [];
-        let notes = this._parseTemplateAnnotations(template);
-        processAnnotations(notes);
-        for (let i=0, note; (i<notes.length) && (note=notes[i]); i++)  {
-          // where to find the node in the concretized list
-          let b$ = note.bindings;
-          for (let j=0, binding; (j<b$.length) && (binding=b$[j]); j++) {
-            if (shouldAddListener(binding)) {
-              addAnnotatedListener(this, i, binding.name,
-                binding.parts[0].value,
-                binding.parts[0].event,
-                binding.parts[0].negate);
-            }
-            addBindingEffect(this, binding, i, dynamicFns);
+      _bindTemplate(template, instanceBinding) {
+        let templateInfo = this.constructor._parseTemplate(template);
+        let wasPreBound = this.__templateInfo == templateInfo;
+        // Optimization: since this is called twice for proto-bound templates,
+        // don't attempt to recreate accessors if this template was pre-bound
+        if (!wasPreBound) {
+          for (let prop in templateInfo.propertyEffects) {
+            this._createPropertyAccessor(prop);
           }
         }
+        if (instanceBinding) {
+          // For instance-time binding, create instance of template metadata
+          // and link into list of templates if necessary
+          templateInfo = Object.create(templateInfo);
+          templateInfo.wasPreBound = wasPreBound;
+          if (!wasPreBound && this.__templateInfo) {
+            templateInfo.nextTemplateInfo = this.__templateInfo;
+            this.__templateInfo.previousTemplateInfo = templateInfo;
+          }
+        }
+        return this.__templateInfo = templateInfo;
+      }
+
+      /**
+       * Adds a property effect to the given template metadata, which is run
+       * at the "propagate" stage of `_propertiesChanged` when the template
+       * has been bound to the element via `_bindTemplate`.
+       *
+       * The `effect` object should match the format in `_addPropertyEffect`.
+       *
+       * @param {string} prop Property that should trigger the effect
+       * @param {Object=} effect Effect metadata object
+       * @protected
+       */
+      static _addTemplatePropertyEffect(templateInfo, prop, effect) {
+        let hostProps = templateInfo.hostProps = templateInfo.hostProps || {};
+        hostProps[prop] = true;
+        let effects = templateInfo.propertyEffects = templateInfo.propertyEffects || {};
+        let propEffects = effects[prop] = effects[prop] || [];
+        propEffects.push(effect);
+      }
+
+      /**
+       * Stamps the provided template and performs instance-time setup for
+       * Polymer template features, including data bindings, declarative event
+       * listeners, and the `this.$` map of `id`'s to nodes.  A document fragment
+       * is returned containing the stamped DOM, ready for insertion into the
+       * DOM.
+       *
+       * This method may be called more than once; however note that due to
+       * `shadycss` polyfill limitations, only styles from templates prepared
+       * using `ShadyCSS.prepareTemplate` will be correctly polyfilled (scoped
+       * to the shadow root and support CSS custom properties), and note that
+       * `ShadyCSS.prepareTemplate` may only be called once per element. As such,
+       * any styles required by in runtime-stamped templates must be included
+       * in the main element template.
+       *
+       * @param {HTMLTemplateElement} template Template to stamp
+       * @return {DocumentFragment} Cloned template content
+       * @protected
+       */
+      _stampTemplate(template) {
+        let dom = super._stampTemplate(template);
+        let templateInfo = this._bindTemplate(template, true);
+        // Add template-instance-specific data to instanced templateInfo
+        templateInfo.nodeList = dom.nodeList;
+        // Capture child nodes to allow unstamping of non-prototypical templates
+        if (!templateInfo.wasPreBound) {
+          let nodes = templateInfo.childNodes = [];
+          for (let n=dom.firstChild; n; n=n.nextSibling) {
+            nodes.push(n);
+          }
+        }
+        dom.templateInfo = templateInfo;
+        // Setup compound storage, 2-way listeners, and dataHost for bindings
+        setupBindings(this, templateInfo);
+        // Flush properties into template nodes if already booted
+        if (this.__dataInitialized) {
+          runEffects(this, templateInfo.propertyEffects, this.__data, null,
+            false, templateInfo.nodeList);
+        }
+        return dom;
+      }
+
+      /**
+       * Removes and unbinds the nodes previously contained in the provided
+       * DocumentFragment returned from `_stampTemplate`.
+       *
+       * @param {DocumentFragment} dom DocumentFragment previously returned
+       *   from `_stampTemplate` associated with the nodes to be removed
+       * @protected
+       */
+      _removeBoundDom(dom) {
+        // Unlink template info
+        let templateInfo = dom.templateInfo;
+        if (templateInfo.previousTemplateInfo) {
+          templateInfo.previousTemplateInfo.nextTemplateInfo =
+            templateInfo.nextTemplateInfo;
+        }
+        if (templateInfo.nextTemplateInfo) {
+          templateInfo.nextTemplateInfo.previousTemplateInfo =
+            templateInfo.previousTemplateInfo;
+        }
+        // Remove stamped nodes
+        let nodes = templateInfo.childNodes;
+        for (let i=0; i<nodes.length; i++) {
+          let node = nodes[i];
+          node.parentNode.removeChild(node);
+        }
+      }
+
+      /**
+       * Overrides default `TemplateStamp` implementation to add support for
+       * parsing bindings from `TextNode`'s' `textContent`.  A `bindings`
+       * array is added to `nodeInfo` and populated with binding metadata
+       * with information capturing the binding target, and a `parts` array
+       * with one or more metadata objects capturing the source(s) of the
+       * binding.
+       *
+       * @override
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template node
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       * @protected
+       */
+      static _parseTemplateNode(node, templateInfo, nodeInfo) {
+        let noted = super._parseTemplateNode(node, templateInfo, nodeInfo);
+        if (node.nodeType === Node.TEXT_NODE) {
+          let parts = this._parseBindings(node.textContent, templateInfo);
+          if (parts) {
+            // Initialize the textContent with any literal parts
+            // NOTE: default to a space here so the textNode remains; some browsers
+            // (IE) evacipate an empty textNode following cloneNode/importNode.
+            node.textContent = literalFromParts(parts) || ' ';
+            addBinding(this, templateInfo, nodeInfo, 'text', 'textContent', parts);
+            noted = true;
+          }
+        }
+        return noted;
+      }
+
+      /**
+       * Overrides default `TemplateStamp` implementation to add support for
+       * parsing bindings from attributes.  A `bindings`
+       * array is added to `nodeInfo` and populated with binding metadata
+       * with information capturing the binding target, and a `parts` array
+       * with one or more metadata objects capturing the source(s) of the
+       * binding.
+       *
+       * @override
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template node
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       * @protected
+       */
+      static _parseTemplateNodeAttribute(node, templateInfo, nodeInfo, name, value) {
+        let parts = this._parseBindings(value, templateInfo);
+        if (parts) {
+          // Attribute or property
+          let origName = name;
+          let kind = 'property';
+          if (name[name.length-1] == '$') {
+            name = name.slice(0, -1);
+            kind = 'attribute';
+          }
+          // Initialize attribute bindings with any literal parts
+          let literal = literalFromParts(parts);
+          if (literal && kind == 'attribute') {
+            node.setAttribute(name, literal);
+          }
+          // Clear attribute before removing, since IE won't allow removing
+          // `value` attribute if it previously had a value (can't
+          // unconditionally set '' before removing since attributes with `$`
+          // can't be set using setAttribute)
+          if (node.localName === 'input' && origName === 'value') {
+            node.setAttribute(origName, '');
+          }
+          // Remove annotation
+          node.removeAttribute(origName);
+          // Case hackery: attributes are lower-case, but bind targets
+          // (properties) are case sensitive. Gambit is to map dash-case to
+          // camel-case: `foo-bar` becomes `fooBar`.
+          // Attribute bindings are excepted.
+          if (kind === 'property') {
+            name = Polymer.CaseMap.dashToCamelCase(name);
+          }
+          addBinding(this, templateInfo, nodeInfo, kind, name, parts, literal);
+          return true;
+        } else {
+          return super._parseTemplateNodeAttribute(node, templateInfo, nodeInfo, name, value);
+        }
+      }
+
+      /**
+       * Overrides default `TemplateStamp` implementation to add support for
+       * binding the properties that a nested template depends on to the template
+       * as `_host_<property>`.
+       *
+       * @override
+       * @param {Node} node Node to parse
+       * @param {Object} templateInfo Template metadata for current template
+       * @param {Object} nodeInfo Node metadata for current template node
+       * @return {boolean} `true` if the visited node added node-specific
+       *   metadata to `nodeInfo`
+       * @protected
+       */
+      static _parseTemplateNestedTemplate(node, templateInfo, nodeInfo) {
+        let noted = super._parseTemplateNestedTemplate(node, templateInfo, nodeInfo);
+        // Merge host props into outer template and add bindings
+        let hostProps = nodeInfo.templateInfo.hostProps;
+        let mode = '{';
+        for (let source in hostProps) {
+          let parts = [{ mode, source, dependencies: [source] }];
+          addBinding(this, templateInfo, nodeInfo, 'property', '_host_' + source, parts);
+        }
+        return noted;
+      }
+
+      /**
+       * Called to parse text in a template (either attribute values or
+       * textContent) into binding metadata.
+       *
+       * Any overrides of this method should return an array of binding part
+       * metadata  representing one or more bindings found in the provided text
+       * and any "literal" text in between.  Any non-literal parts will be passed
+       * to `_evaluateBinding` when any dependencies change.  The only required
+       * fields of each "part" in the returned array are as follows:
+       *
+       * - `dependencies` - Array containing trigger metadata for each property
+       *   that should trigger the binding to update
+       * - `literal` - String containing text if the part represents a literal;
+       *   in this case no `dependencies` are needed
+       *
+       * Additional metadata for use by `_evaluateBinding` may be provided in
+       * each part object as needed.
+       *
+       * The default implementation handles the following types of bindings
+       * (one or more may be intermixed with literal strings):
+       * - Property binding: `[[prop]]`
+       * - Path binding: `[[object.prop]]`
+       * - Negated property or path bindings: `[[!prop]]` or `[[!object.prop]]`
+       * - Two-way property or path bindings (supports negation):
+       *   `{{prop}}`, `{{object.prop}}`, `{{!prop}}` or `{{!object.prop}}`
+       * - Inline computed method (supports negation):
+       *   `[[compute(a, 'literal', b)]]`, `[[!compute(a, 'literal', b)]]`
+       *
+       * @param {String} text Text to parse from attribute or textContent
+       * @param {Object} templateInfo Current template metadata
+       * @return {Array<Object>} Array of binding part metadata
+       * @protected
+       */
+      static _parseBindings(text, templateInfo) {
+        let parts = [];
+        let lastIndex = 0;
+        let m;
+        // Example: "literal1{{prop}}literal2[[!compute(foo,bar)]]final"
+        // Regex matches:
+        //        Iteration 1:  Iteration 2:
+        // m[1]: '{{'          '[['
+        // m[2]: ''            '!'
+        // m[3]: 'prop'        'compute(foo,bar)'
+        while ((m = bindingRegex.exec(text)) !== null) {
+          // Add literal part
+          if (m.index > lastIndex) {
+            parts.push({literal: text.slice(lastIndex, m.index)});
+          }
+          // Add binding part
+          let mode = m[1][0];
+          let negate = Boolean(m[2]);
+          let source = m[3].trim();
+          let customEvent, notifyEvent, colon;
+          if (mode == '{' && (colon = source.indexOf('::')) > 0) {
+            notifyEvent = source.substring(colon + 2);
+            source = source.substring(0, colon);
+            customEvent = true;
+          }
+          let signature = parseMethod(source);
+          let dependencies = [];
+          if (signature) {
+            // Inline computed function
+            let {args, methodName} = signature;
+            for (let i=0; i<args.length; i++) {
+              let arg = args[i];
+              if (!arg.literal) {
+                dependencies.push(arg);
+              }
+            }
+            let dynamicFns = templateInfo.dynamicFns;
+            if (dynamicFns && dynamicFns[methodName] || signature.static) {
+              dependencies.push(methodName);
+            }
+          } else {
+            // Property or path
+            dependencies.push(source);
+          }
+          parts.push({
+            source, mode, negate, customEvent, signature, dependencies,
+            event: notifyEvent
+          });
+          lastIndex = bindingRegex.lastIndex;
+        }
+        // Add a final literal part
+        if (lastIndex && lastIndex < text.length) {
+          let literal = text.substring(lastIndex);
+          if (literal) {
+            parts.push({
+              literal: literal
+            });
+          }
+        }
+        if (parts.length) {
+          return parts;
+        }
+      }
+
+      /**
+       * Called to evaluate a previously parsed binding part based on a set of
+       * one or more changed dependencies.
+       *
+       * @param {HTMLElement} inst Element that should be used as scope for
+       *   binding dependencies
+       * @param {Object} part Binding part metadata
+       * @param {Object} props Bag of current property changes
+       * @param {Object} oldProps Bag of previous values for changed properties
+       * @param {boolean} hasPaths True with `props` contains one or more paths
+       * @return {*} Value the binding part evaluated to
+       * @protected
+       */
+      static _evaluateBinding(inst, part, path, props, oldProps, hasPaths) {
+        let value;
+        if (part.signature) {
+          value = runMethodEffect(inst, path, props, oldProps, part.signature);
+        } else if (path != part.source) {
+          value = Polymer.Path.get(inst, part.source);
+        } else {
+          if (hasPaths && Polymer.Path.isPath(path)) {
+            value = Polymer.Path.get(inst, path);
+          } else {
+            value = inst.__data[path];
+          }
+        }
+        if (part.negate) {
+          value = !value;
+        }
+        return value;
       }
 
     }
@@ -4371,6 +4546,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     const polymerElementBase = Polymer.PropertyEffects(base);
 
     let caseMap = Polymer.CaseMap;
+
+    const DISABLED = 'disable-upgrade';
 
     /**
      * Returns the `properties` object specifically on `klass`. Use for:
@@ -4671,8 +4848,10 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       if (window.ShadyCSS) {
         window.ShadyCSS.prepareTemplate(template, is, ext);
       }
-      proto._bindTemplate(template, propertiesForClass(proto.constructor));
+      proto._bindTemplate(template);
     }
+
+    function flushPropertiesStub() {}
 
     /**
      * @polymerMixinClass
@@ -4690,7 +4869,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        */
       static get observedAttributes() {
         if (!this.hasOwnProperty(goog.reflect.objectProperty('__observedAttributes', this))) {
-          let list = [];
+          let list = [DISABLED];
           let properties = propertiesForClass(this);
           for (let prop in properties) {
             list.push(Polymer.CaseMap.camelToDashCase(prop));
@@ -4786,17 +4965,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         return this._importPath;
       }
 
-      constructor() {
-        super();
-        Polymer.telemetry.instanceCount++;
-        // Stamp template
-        if (this._template) {
-          this.root = this._stampTemplate(this._template);
-        } else {
-          this.root = this;
-        }
-      }
-
       /**
        * Overrides the default `Polymer.PropertyAccessors` to ensure class
        * metaprogramming related to property accessors and effects has
@@ -4808,6 +4976,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @override
        */
       _initializeProperties() {
+        Polymer.telemetry.instanceCount++;
+        hostStack.registerHost(this);
         this.constructor.finalize();
         const importPath = this.constructor.importPath;
         // note: finalize template when we have access to `localName` to
@@ -4834,7 +5004,9 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
             let value = typeof info.value == 'function' ?
               info.value.call(this) :
               info.value;
-            if (this._hasPropertyEffect(p)) {
+            // Set via `_setProperty` if there is an accessor, to enable
+            // initializing readOnly property defaults
+            if (this._hasAccessor(p)) {
               this._setProperty(p, value)
             } else {
               this[p] = value;
@@ -4854,10 +5026,12 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @override
        */
       connectedCallback() {
-        if (window.ShadyCSS) {
+        if (window.ShadyCSS && this._template) {
           window.ShadyCSS.styleElement(this);
         }
-        this._flushProperties();
+        if (!this.__dataInitialized) {
+          this._flushProperties();
+        }
       }
 
       /**
@@ -4867,6 +5041,21 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @override
        */
       disconnectedCallback() {}
+
+      /**
+       * Stamps the element template.
+       *
+       * @override
+       */
+      ready() {
+        if (this._template) {
+          hostStack.beginHosting(this);
+          this.root = this._stampTemplate(this._template);
+          hostStack.endHosting(this);
+          this.$ = this.root.$;
+        }
+        super.ready();
+      }
 
       /**
        * Implements `PropertyEffects`'s `_readyClients` call. Attaches
@@ -4926,7 +5115,19 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @override
        */
       attributeChangedCallback(name, old, value) {
-        if (old !== value) {
+        // process `disable-upgrade` specially:
+        // First we see `disable-upgrade` added and disable `_flushProperties`,
+        // then when it's removed, restore regular flushing and flush.
+        // This should only be allowed before "readying".
+        if (name === DISABLED && !this.__dataInitialized) {
+          if (value !== null) {
+            this.__flushProperties = this._flushProperties;
+            this._flushProperties = flushPropertiesStub;
+          } else {
+            this._flushProperties = this.__flushProperties;
+            this._flushProperties();
+          }
+        } else if (old !== value) {
           let property = caseMap.dashToCamelCase(name);
           let type = propertiesForClass(this.constructor)[property].type;
           if (!this._hasReadOnlyEffect(property)) {
@@ -4975,10 +5176,70 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         return Polymer.ResolveUrl.resolveUrl(url, base);
       }
 
+      /**
+       * Overrides `PropertyAccessors` to add map of dynamic functions on
+       * template info, for consumption by `PropertyEffects` template binding
+       * code. This map determines which method templates should have accessors
+       * created for them.
+       *
+       * @override
+       */
+      static _parseTemplateContent(template, templateInfo, nodeInfo) {
+        templateInfo.dynamicFns = templateInfo.dynamicFns || propertiesForClass(this);
+        return super._parseTemplateContent(template, templateInfo, nodeInfo);
+      }
+
     }
 
     return PolymerElement;
   });
+
+  /**
+   * Helper api for enqueing client dom created by a host element.
+   *
+   * By default elements are flushed via `_flushProperties` when
+   * `connectedCallback` is called. Elements attach their client dom to
+   * themselves at `ready` time which results from this first flush.
+   * This provides an ordering guarantee that the client dom an element
+   * creates is flushed before the element itself (i.e. client `ready`
+   * fires before host `ready`).
+   *
+   * However, if `_flushProperties` is called *before* an element is connected,
+   * as for example `Templatize` does, this ordering guarantee cannot be
+   * satisfied because no elements are connected. (Note: Bound elements that
+   * receive data do become enqueued clients and are properly ordered but
+   * unbound elements are not.)
+   *
+   * To maintain the desired "client before host" ordering guarantee for this
+   * case we rely on the "host stack. Client nodes registers themselves with
+   * the creating host element when created. This ensures that all client dom
+   * is readied in the proper order, maintaining the desired guarantee.
+   *
+   * @private
+   */
+  let hostStack = {
+
+    stack: [],
+
+    registerHost(inst) {
+      if (this.stack.length) {
+        let host = this.stack[this.stack.length-1];
+        host._enqueueClient(inst);
+      }
+    },
+
+    beginHosting(inst) {
+      this.stack.push(inst);
+    },
+
+    endHosting(inst) {
+      let stackLen = this.stack.length;
+      if (stackLen && this.stack[stackLen-1] == inst) {
+        this.stack.pop();
+      }
+    }
+
+  }
 
   /**
    * Provides basic tracking of element definitions (registrations) and
@@ -5240,6 +5501,9 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     }
   }
 
+  /**
+   * @memberof Polymer
+   */
   Polymer.Debouncer = Debouncer;
 })();
 </script>
@@ -5382,6 +5646,11 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       // the bounding box of the target of the event
       // Thanks IE 10 >:(
       let t = Gestures._findOriginalTarget(ev);
+      // make sure the target of the event is an element so we can use getBoundingClientRect,
+      // if not, just assume it is a synthetic click
+      if (t.nodeType !== Node.ELEMENT_NODE) {
+        return true;
+      }
       let bcr = t.getBoundingClientRect();
       // use page x/y to account for scrolling
       let x = ev.pageX, y = ev.pageY;
@@ -5471,7 +5740,12 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       // if there is not a shadowroot, exit the loop
       while (next && next.shadowRoot && !window.ShadyDOM) {
         // if there is a node at x/y in the shadowroot, look deeper
+        let oldNext = next;
         next = next.shadowRoot.elementFromPoint(x, y);
+        // on Safari, elementFromPoint may return the shadowRoot host
+        if (oldNext === next) {
+          break;
+        }
         if (next) {
           node = next;
         }
@@ -6226,24 +6500,33 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       flushQueue(beforeRenderQueue);
       // after the render
       setTimeout(function() {
-        flushQueue(afterRenderQueue);
+        runQueue(afterRenderQueue);
       });
     });
   }
 
   function flushQueue(queue) {
     while (queue.length) {
-      const q = queue.shift();
-      const context = q[0];
-      const callback = q[1];
-      const args = q[2];
-      try {
-        callback.apply(context, args);
-      } catch(e) {
-        setTimeout(() => {
-          throw e;
-        })
-      }
+      callMethod(queue.shift());
+    }
+  }
+
+  function runQueue(queue) {
+    for (let i=0, l=queue.length; i < l; i++) {
+      callMethod(queue.shift());
+    }
+  }
+
+  function callMethod(info) {
+    const context = info[0];
+    const callback = info[1];
+    const args = info[2];
+    try {
+      callback.apply(context, args);
+    } catch(e) {
+      setTimeout(() => {
+        throw e;
+      })
     }
   }
 
@@ -6252,6 +6535,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       flushQueue(beforeRenderQueue);
       flushQueue(afterRenderQueue);
     }
+    scheduled = false;
   }
 
   /**
@@ -7309,6 +7593,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       constructor() {
         super();
+        this.root = this;
         this.created();
       }
 
@@ -7357,12 +7642,17 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       /**
        * Overrides the default `Polymer.PropertyEffects` implementation to
-       * add support for one-time `registration` callback.
+       * add support for class initialization via the `_registered` callback.
+       * This is called only when the first instance of the element is created.
        *
        * @override
        */
       _initializeProperties() {
-        this._registered();
+        let proto = Object.getPrototypeOf(this);
+        if (!proto.hasOwnProperty('__hasRegisterFinished')) {
+          proto.__hasRegisterFinished = true;
+          this._registered();
+        }
         super._initializeProperties();
       }
 
@@ -7538,8 +7828,9 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        *   template content.
       */
       instanceTemplate(template) {
+        let content = this.constructor._contentForTemplate(template);
         let dom = /** @type {DocumentFragment} */
-          (document.importNode(template._content || template.content, true));
+          (document.importNode(content, true));
         return dom;
       }
 
@@ -8307,8 +8598,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
     function GenerateClassFromInfo(info, Base) {
 
-      let registered = false;
-
       class PolymerGenerated extends Base {
 
         static get properties() {
@@ -8339,13 +8628,19 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         }
 
         _registered() {
-          if (!registered) {
-            super._registered();
-            // call `registered` only if it was not called for *this* constructor
-            registered = true;
-            if (info.registered) {
-              info.registered.call(Object.getPrototypeOf(this));
-            }
+          super._registered();
+          /* NOTE: `beforeRegister` is called here for bc, but the behavior
+           is different than in 1.x. In 1.0, the method was called *after*
+           mixing prototypes together but *before* processing of meta-objects.
+           However, dynamic effects can still be set here and can be done either
+           in `beforeRegister` or `registered`. It is no longer possible to set
+           `is` in `beforeRegister` as you could in 1.x.
+          */
+          if (info.beforeRegister) {
+            info.beforeRegister.call(Object.getPrototypeOf(this));
+          }
+          if (info.registered) {
+            info.registered.call(Object.getPrototypeOf(this));
           }
         }
 
@@ -8493,13 +8788,6 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
         LegacyElementMixin(HTMLElement));
       // decorate klass with registration info
       klass.is = info.is;
-      // NOTE: while we could call `beforeRegister` here to maintain
-      // some BC, the state of the element at this point is not as it was in 1.0
-      // In 1.0, the method was called *after* mixing prototypes together
-      // but before processing of meta-objects. Since this is now done
-      // in 1 step via `GenerateClassFromInfo`, this is no longer possible.
-      // However, *most* work (not setting `is`) that was previously done in
-      // `beforeRegister` should be possible in `registered`.
       return klass;
     }
 
@@ -8919,7 +9207,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       return templateHost && templateHost._methodHost || templateHost;
     }
 
-    function createTemplatizerClass(template, options) {
+    function createTemplatizerClass(template, templateInfo, options) {
       // Anonymous class created by the templatize
       /**
        * @unrestricted
@@ -8929,22 +9217,22 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       let klass = class extends base { }
       klass.prototype.__templatizeOptions = options;
       klass.prototype._bindTemplate(template);
-      addNotifyEffects(klass, template, options);
+      addNotifyEffects(klass, template, templateInfo, options);
       return klass;
     }
 
-    function addPropagateEffects(template, options) {
+    function addPropagateEffects(template, templateInfo, options) {
       let userForwardHostProp = options.forwardHostProp;
       if (userForwardHostProp) {
         // Provide data API and property effects on memoized template class
-        let klass = template._content.__templatizeTemplateClass;
+        let klass = templateInfo.templatizeTemplateClass;
         if (!klass) {
           let base = options.mutableData ? MutableDataTemplate : DataTemplate;
-          klass = template._content.__templatizeTemplateClass =
+          klass = templateInfo.templatizeTemplateClass =
             class TemplatizedTemplate extends base {}
           // Add template - >instances effects
           // and host <- template effects
-          let hostProps = template._content._hostProps;
+          let hostProps = templateInfo.hostProps;
           for (let prop in hostProps) {
             klass.prototype._addPropertyEffect('_host_' + prop,
               klass.prototype.PROPERTY_EFFECT_TYPES.PROPAGATE,
@@ -8975,8 +9263,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
     }
 
-    function addNotifyEffects(klass, template, options) {
-      let hostProps = template._content._hostProps || {};
+    function addNotifyEffects(klass, template, templateInfo, options) {
+      let hostProps = templateInfo.hostProps || {};
       for (let iprop in options.instanceProps) {
         delete hostProps[iprop];
         let userNotifyInstanceProp = options.notifyInstanceProp;
@@ -9017,7 +9305,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
      *     // Get a template from somewhere, e.g. light DOM
      *     let template = this.querySelector('template');
      *     // Prepare the template
-     *     let TemplateClass = Polymer.Tempaltize.templatize(template);
+     *     let TemplateClass = Polymer.Templatize.templatize(template);
      *     // Instance the template with an initial data model
      *     let instance = new TemplateClass({myProp: 'initial'});
      *     // Insert the instance's DOM somewhere, e.g. element's shadow DOM
@@ -9079,11 +9367,11 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * - `instanceProps`: Dictionary of property names that will be added
        *   to the instance by the templatize owner.  These properties shadow any
        *   host properties, and changes within the template to these properties
-       *   will result in `notifyInstanceProperties` to be called.
+       *   will result in `notifyInstanceProp` being called.
        * - `mutableData`: When `true`, the generated class will skip strict
        *   dirty-checking for objects and arrays (always consider them to be
        *   "dirty").
-       * - `notifyInstanceProperties(instance, property, value)`: Called when
+       * - `notifyInstanceProp(instance, property, value)`: Called when
        *   an instance property changes.  Users may choose to call `notifyPath`
        *   on e.g. the owner to notify the change.
        * - `parentModel`: When `true`, events handled by declarative event listeners
@@ -9105,32 +9393,32 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
        * @param {HTMLTemplateElement} template Template to templatize
        * @param {*} owner Owner of the template instances; any optional callbacks
        *   will be bound to this owner.
-       * @param {*} options Options dictionary (see summary for details)
+       * @param {*=} options Options dictionary (see summary for details)
        * @return {TemplateInstanceBase} Generated class bound to the template
        *   provided
        */
       templatize(template, owner, options) {
+        options = options || {};
         if (template.__templatizeOwner) {
           throw new Error('A <template> can only be templatized once');
         }
         template.__templatizeOwner = owner;
-        // Ensure template has _content
-        template._content = template._content || template.content;
+        let templateInfo = owner.constructor._parseTemplate(template);
         // Get memoized base class for the prototypical template, which
         // includes property effects for binding template & forwarding
-        let baseClass = template._content.__templatizeInstanceClass;
+        let baseClass = templateInfo.templatizeInstanceClass;
         if (!baseClass) {
-          baseClass = template._content.__templatizeInstanceClass =
-            createTemplatizerClass(template, options);
+          baseClass = createTemplatizerClass(template, templateInfo, options);
+          templateInfo.templatizeInstanceClass = baseClass;
         }
         // Host property forwarding must be installed onto template instance
-        addPropagateEffects(template, options);
+        addPropagateEffects(template, templateInfo, options);
         // Subclass base class and add reference for this specific template
         let klass = class TemplateInstance extends baseClass {};
         klass.prototype._methodHost = findMethodHost(template);
         klass.prototype.__dataHost = template;
         klass.prototype.__templatizeOwner = owner;
-        klass.prototype.__hostProps = template._content._hostProps;
+        klass.prototype.__hostProps = templateInfo.hostProps;
         return klass;
       },
 
@@ -9319,7 +9607,10 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
   (function() {
     'use strict';
 
-    const domBindBase = Polymer.OptionalMutableData(Polymer.PropertyEffects(HTMLElement));
+    const domBindBase =
+      Polymer.GestureEventListeners(
+        Polymer.OptionalMutableData(
+          Polymer.PropertyEffects(HTMLElement)));
 
     /**
      * Custom element to allow using Polymer's template features (data binding,
@@ -9388,8 +9679,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
             observer.observe(this, {childList: true});
             return;
           }
-          this._bindTemplate(template);
           this.root = this._stampTemplate(template);
+          this.$ = this.root.$;
           this.__children = [];
           for (let n=this.root.firstChild; n; n=n.nextSibling) {
             this.__children[this.__children.length] = n;
@@ -19951,8 +20242,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
     </style>
 
     <app-location route="{{route}}" use-hash-as-path=""></app-location>
-    <app-route route="{{route}}" pattern="[[rootPattern]]:page" data="{{routeData}}" tail="{{subroute}}"></app-route>
-
+    <app-route route="{{route}}" pattern="/:page" data="{{routeData}}" tail="{{subroute}}"></app-route>
+   
     <app-drawer-layout fullbleed="">
       <app-drawer id="drawer" slot="drawer">
         <app-toolbar>Menu</app-toolbar>
@@ -19989,8 +20280,8 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
           page: {
             type: String,
             reflectToAttribute: true,
-            value: 'game',
             observer: '_pageChanged',
+            value: "game"
           },
         };
       }
@@ -20003,17 +20294,19 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
 
       constructor() {
         super();
-        this.rootPattern = (new URL(this.rootPath)).pathname;
       }
 
+      doPrint(obj) {
+        return JSON.stringify(obj);
+      }
 
       _routePageChanged(page) {
+        console.log('routePageChanged',page, this.page);
         // Polymer 2.0 will call with `undefined` on initialization.
         // Ignore until we are properly called with a string.
         if (page === undefined) {
           return;
         }
-
         // If no page was found in the route data, page will be an empty string.
         // Deault to 'view1' in that case.
         this.page = page || 'game';
@@ -20025,6 +20318,7 @@ subject to an additional IP rights grant found at http://polymer.github.io/PATEN
       }
 
       _pageChanged(page) {
+        console.log('pageChanged',page, this.page);
         var resolvedPageUrl = this.resolveUrl(page + '-page.html');
         Polymer.importHref(
             resolvedPageUrl,
